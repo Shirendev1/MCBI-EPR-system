@@ -1,0 +1,178 @@
+<style>
+.phase-card{border:1.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:16px 20px;margin-bottom:10px;cursor:pointer;transition:border-color .2s,background .2s}
+.phase-card:hover{border-color:var(--color-border-secondary);background:var(--color-background-secondary)}
+.phase-card.active{border-color:#1D9E75;background:var(--color-background-secondary)}
+.phase-header{display:flex;align-items:center;gap:14px}
+.phase-badge{min-width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:500;flex-shrink:0}
+.phase-title{font-size:14px;font-weight:500;color:var(--color-text-primary)}
+.phase-sub{font-size:12px;color:var(--color-text-secondary);margin-top:2px}
+.phase-timeline{font-size:11px;font-weight:500;margin-left:auto;padding:3px 10px;border-radius:20px;white-space:nowrap}
+.phase-detail{display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--color-border-tertiary)}
+.phase-detail.open{display:block}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.detail-box{background:var(--color-background-tertiary);border-radius:var(--border-radius-md);padding:10px 12px}
+.detail-label{font-size:11px;color:var(--color-text-tertiary);margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em}
+.detail-val{font-size:13px;color:var(--color-text-primary)}
+.task-list{list-style:none;padding:0;margin:0}
+.task-list li{font-size:13px;color:var(--color-text-secondary);padding:4px 0;display:flex;gap:8px;align-items:flex-start}
+.task-list li:before{content:'';width:6px;height:6px;border-radius:50%;margin-top:5px;flex-shrink:0}
+.milestone-bar{height:6px;border-radius:3px;margin-top:14px;background:var(--color-background-tertiary);overflow:hidden}
+.milestone-fill{height:100%;border-radius:3px;transition:width .4s}
+.progress-row{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--color-text-tertiary)}
+.timeline-track{display:flex;align-items:center;gap:0;margin-bottom:20px;padding:0 4px}
+.tl-seg{flex:1;height:4px;background:var(--color-border-tertiary);position:relative}
+.tl-seg.done{background:#1D9E75}
+.tl-seg.active{background:linear-gradient(90deg,#1D9E75 60%,var(--color-border-tertiary))}
+.tl-dot{width:12px;height:12px;border-radius:50%;border:2px solid var(--color-border-secondary);background:var(--color-background-primary);flex-shrink:0;z-index:1}
+.tl-dot.done{background:#1D9E75;border-color:#1D9E75}
+.tl-dot.active{background:#fff;border-color:#1D9E75;box-shadow:0 0 0 3px #1D9E7533}
+</style>
+
+<h2 class="sr-only">MCBI пилот хэрэгжүүлэлтийн 4 үе шат — дарж дэлгэрэнгүй харна уу</h2>
+
+<div style="padding:4px 0 16px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+    <span style="font-size:13px;font-weight:500;color:var(--color-text-primary)">Хэрэгжүүлэлтийн хуваарь</span>
+    <span style="font-size:12px;color:var(--color-text-tertiary)">2026 Q3 → 2027 Q2+</span>
+  </div>
+  <div class="timeline-track">
+    <div class="tl-dot active" id="d0"></div>
+    <div class="tl-seg" id="s0"></div>
+    <div class="tl-dot" id="d1"></div>
+    <div class="tl-seg" id="s1"></div>
+    <div class="tl-dot" id="d2"></div>
+    <div class="tl-seg" id="s2"></div>
+    <div class="tl-dot" id="d3"></div>
+  </div>
+</div>
+
+<div class="phase-card active" onclick="toggle(0)" id="card0">
+  <div class="phase-header">
+    <div class="phase-badge" style="background:#E1F5EE;color:#085041">1</div>
+    <div>
+      <div class="phase-title">Эрх зүйн үндэс & бүртгэлийн систем</div>
+      <div class="phase-sub">Яамтай гэрээ · EPR хураамжийн журам · Бүртгэл</div>
+    </div>
+    <div class="phase-timeline" style="background:#E1F5EE;color:#085041">2026 Q3</div>
+  </div>
+  <div class="phase-detail open" id="det0">
+    <div class="detail-grid">
+      <div class="detail-box"><div class="detail-label">Хариуцагч</div><div class="detail-val">MCBI + Байгаль орчны яам</div></div>
+      <div class="detail-box"><div class="detail-label">Гол гарц</div><div class="detail-val">EPR журам батлагдах</div></div>
+    </div>
+    <ul class="task-list">
+      <li><span style="background:#1D9E75" class="task-list li:before"></span>Батарейны хаягдлын тогтолцоог зохицуулах дүрэм журам боловсруулах</li>
+      <li><span style="background:#1D9E75"></span>MCBI-г зохицуулах байгууллагаар бүртгүүлэх</li>
+      <li><span style="background:#1D9E75"></span>Үйлдвэрлэгч, импортлогчийн бүртгэлийн платформ бэлдэх</li>
+      <li><span style="background:#1D9E75"></span>EPR хураамжийн хэмжээ тогтоох аргачлал</li>
+      <li><span style="background:#1D9E75"></span>Усны эх үүсвэрийн хамгаалалтыг голлосон нийтийн байр суурь бий болгох</li>
+    </ul>
+    <div class="milestone-bar"><div class="milestone-fill" style="width:25%;background:#1D9E75"></div></div>
+    <div class="progress-row"><span>Эхлэл</span><span>Журам батлагдсан</span></div>
+  </div>
+</div>
+
+<div class="phase-card" onclick="toggle(1)" id="card1">
+  <div class="phase-header">
+    <div class="phase-badge" style="background:#EEEDFE;color:#26215C">2</div>
+    <div>
+      <div class="phase-title">Цуглуулалтын сүлжээ (пилот)</div>
+      <div class="phase-sub">QR буцаалт · Дэлгүүр, баазууд · Логистик</div>
+    </div>
+    <div class="phase-timeline" style="background:#EEEDFE;color:#26215C">2026 Q4</div>
+  </div>
+  <div class="phase-detail" id="det1">
+    <div class="detail-grid">
+      <div class="detail-box"><div class="detail-label">Хариуцагч</div><div class="detail-val">MCBI + орон нутгийн засаг</div></div>
+      <div class="detail-box"><div class="detail-label">Гол гарц</div><div class="detail-val">Пилот цэгүүд ажиллаж эхлэх</div></div>
+    </div>
+    <ul class="task-list">
+      <li>Улаанбаатарт 5–10 цуглуулалтын цэг байгуулах (дэлгүүр, оффис)</li>
+      <li>QR код буцаалтын систем ажиллуулах</li>
+      <li>Хэрэглэгчийн урамшууллын схем (депозит эсвэл оноо)</li>
+      <li>Батарей хадгалах, тээвэрлэх аюулгүй байдлын протокол</li>
+      <li>Иргэдийн мэдлэгжүүлэх анхны кампанит ажил</li>
+    </ul>
+    <div class="milestone-bar"><div class="milestone-fill" style="width:0%;background:#534AB7"></div></div>
+    <div class="progress-row"><span>Бүртгэл дууссаны дараа</span><span>10+ цэг идэвхтэй</span></div>
+  </div>
+</div>
+
+<div class="phase-card" onclick="toggle(2)" id="card2">
+  <div class="phase-header">
+    <div class="phase-badge" style="background:#FAECE7;color:#4A1B0C">3</div>
+    <div>
+      <div class="phase-title">Боловсруулах үйлдвэртэй гэрээ</div>
+      <div class="phase-sub">IOCB Prague · Li, Co, Mn ялгаралт · CZ–MN</div>
+    </div>
+    <div class="phase-timeline" style="background:#FAECE7;color:#4A1B0C">2027 Q1</div>
+  </div>
+  <div class="phase-detail" id="det2">
+    <div class="detail-grid">
+      <div class="detail-box"><div class="detail-label">Хариуцагч</div><div class="detail-val">MCBI + IOCB Prague</div></div>
+      <div class="detail-box"><div class="detail-label">Гол гарц</div><div class="detail-val">Боловсруулалтын гэрээ</div></div>
+    </div>
+    <ul class="task-list">
+      <li>IOCB Prague-н усан аргын ялгаралтын технологи нэвтрүүлэх</li>
+      <li>Li, Co, Mn, Ni нөөц ялгах процессын загвар</li>
+      <li>Монгол → Чех дахивар материал нийлүүлэлтийн гэрээ</li>
+      <li>Боsch Powertrain Jihlava-тай боломжит түншлэлийн яриа</li>
+      <li>2025 оны Чех–Монголын Иж Бүрэн Түншлэлийн хүрээнд хамтын ажиллагаа</li>
+    </ul>
+    <div class="milestone-bar"><div class="milestone-fill" style="width:0%;background:#D85A30"></div></div>
+    <div class="progress-row"><span>Пилот дууссаны дараа</span><span>Гэрээ байгуулагдсан</span></div>
+  </div>
+</div>
+
+<div class="phase-card" onclick="toggle(3)" id="card3">
+  <div class="phase-header">
+    <div class="phase-badge" style="background:#EAF3DE;color:#173404">4</div>
+    <div>
+      <div class="phase-title">Бүрэн хэмжээний EPR тогтолцоо</div>
+      <div class="phase-sub">Бүх оролцогч · Дахивар зах зээл · Масштаб</div>
+    </div>
+    <div class="phase-timeline" style="background:#EAF3DE;color:#173404">2027 Q2+</div>
+  </div>
+  <div class="phase-detail" id="det3">
+    <div class="detail-grid">
+      <div class="detail-box"><div class="detail-label">Хариуцагч</div><div class="detail-val">Бүх оролцогч талууд</div></div>
+      <div class="detail-box"><div class="detail-label">Гол гарц</div><div class="detail-val">Тогтвортой гогцоо</div></div>
+    </div>
+    <ul class="task-list">
+      <li>EPR хураамжийн жил бүрийн тайлагнал, аудит</li>
+      <li>Цуглуулалтын сүлжээг бүх аймагт өргөтгөх</li>
+      <li>Дахивар зах зээлийн орлогыг санд буцаах механизм идэвхжих</li>
+      <li>EV батарейн өсөлтийг харгалзан системийг шинэчлэх</li>
+      <li>Олон улсын EPR тогтолцоотой нийцүүлэх (EU Battery Regulation)</li>
+    </ul>
+    <div class="milestone-bar"><div class="milestone-fill" style="width:0%;background:#639922"></div></div>
+    <div class="progress-row"><span>Системийн эхлэл</span><span>Тогтвортой гогцоо</span></div>
+  </div>
+</div>
+
+<script>
+const colors = ['#1D9E75','#534AB7','#D85A30','#639922'];
+function toggle(i) {
+  for(let j=0;j<4;j++){
+    const det = document.getElementById('det'+j);
+    const card = document.getElementById('card'+j);
+    if(j===i){
+      const isOpen = det.classList.contains('open');
+      det.classList.toggle('open',!isOpen);
+      card.classList.toggle('active',!isOpen);
+    } else {
+      det.classList.remove('open');
+      card.classList.remove('active');
+    }
+  }
+  updateTimeline(i);
+}
+function updateTimeline(active){
+  for(let j=0;j<4;j++){
+    document.getElementById('d'+j).className='tl-dot'+(j<active?' done':j===active?' active':'');
+  }
+  for(let j=0;j<3;j++){
+    document.getElementById('s'+j).className='tl-seg'+(j<active?' done':j===active?' active':'');
+  }
+}
+</script>
