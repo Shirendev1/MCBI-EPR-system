@@ -59,7 +59,7 @@ def register_battery(
     granularity, model_id, batch_number, serial_number,
     country, manufacture_date, status
 ))
-    ))
+
     conn.commit()
     cur.close()
     conn.close()
