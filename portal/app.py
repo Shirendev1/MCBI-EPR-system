@@ -140,5 +140,4 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
     **MCBI EPR Pilot — N-064**
     Prototype for testing battery identification and EPR data flows.
     """)
-
-demo.launch(ssr_mode=False)
+demo.launch(server_name="0.0.0.0", server_port=10000, ssr_mode=False)
