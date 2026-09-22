@@ -5,24 +5,24 @@ import os
 import psycopg2
 DATABASE_URL = os.getenv("DATABASE_URL")
 def init_database():
-    conn=psycopg2.connect(DATABASE_URL)
-    cur=conn.cursor()
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS batteries(
-        id TEXT PRIMARY KEY,
-        company TEXT,
-        category TEXT,
-        chemistry TEXT,
-        weight DOUBLE PRECISION,
-        capacity DOUBLE PRECISION,
-        granularity TEXT,
-        model_id TEXT,
-        batch_number TEXT,
-        serial_number TEXT.
-        country TEXT,
-        manufacture_date TEXT,
-        status TEXT,
-        registered_TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        CREATE TABLE IF NOT EXISTS batteries (
+            id TEXT PRIMARY KEY,
+            company TEXT,
+            category TEXT,
+            chemistry TEXT,
+            weight DOUBLE PRECISION,
+            capacity DOUBLE PRECISION,
+            granularity TEXT,
+            model_id TEXT,
+            batch_number TEXT,
+            serial_number TEXT,
+            country TEXT,
+            manufacture_date TEXT,
+            status TEXT,
+            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
     conn.commit()
