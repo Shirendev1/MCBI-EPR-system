@@ -1,6 +1,35 @@
 import gradio as gr
 import uuid
 from datetime import datetime
+import os
+import psycopg2
+DATABASE_URL = os.getenv("DATABASE_URL")
+def init_database():
+    conn=psycopg2.connect(DATABASE_URL)
+    cur=conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS batteries(
+        id TEXT PRIMARY KEY,
+        company TEXT,
+        category TEXT,
+        chemistry TEXT,
+        weight DOUBLE PRECISION,
+        capacity DOUBLE PRECISION,
+        granularity TEXT,
+        model_id TEXT,
+        batch_number TEXT,
+        serial_number TEXT.
+        country TEXT,
+        manufacture_date TEXT,
+        status TEXT,
+        registered_TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+init_database()
+
 
 def register_battery(
     company,
@@ -17,7 +46,23 @@ def register_battery(
     status
 ):
     battery_id = "MCBI-" + str(uuid.uuid4())[:8].upper()
-
+    conn=psycopg2.connect(DATDBASE_URL)
+    cur=conn.cursor()
+    cur.execute("""
+        INSERT INTO batteries(
+        id, company, category, chemistry, weight, capacity,
+        granularity, model_id, batch_number, 
+        granularity, model_id, batch_number, serial_number,
+                country, manufacture_date, status
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        battery_id, company, category, chemistry, weight, capacity,
+        granularity, model_id, batch_number, serial_number,
+        country, manufacture_date, status
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
     result = f"""
 # MCBI Battery Record
 **Battery ID:** {battery_id}
