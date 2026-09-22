@@ -49,16 +49,16 @@ def register_battery(
     conn=psycopg2.connect(DATABASE_URL)
     cur=conn.cursor()
     cur.execute("""
-        INSERT INTO batteries(
+    INSERT INTO batteries(
         id, company, category, chemistry, weight, capacity,
-        granularity, model_id, batch_number, 
-        granularity, model_id, batch_number, serial_number,
-                country, manufacture_date, status
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        battery_id, company, category, chemistry, weight, capacity,
         granularity, model_id, batch_number, serial_number,
         country, manufacture_date, status
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+""", (
+    battery_id, company, category, chemistry, weight, capacity,
+    granularity, model_id, batch_number, serial_number,
+    country, manufacture_date, status
+))
     ))
     conn.commit()
     cur.close()
