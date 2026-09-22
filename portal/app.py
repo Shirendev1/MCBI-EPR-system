@@ -46,7 +46,7 @@ def register_battery(
     status
 ):
     battery_id = "MCBI-" + str(uuid.uuid4())[:8].upper()
-    conn=psycopg2.connect(DATDBASE_URL)
+    conn=psycopg2.connect(DATABASE_URL)
     cur=conn.cursor()
     cur.execute("""
         INSERT INTO batteries(
