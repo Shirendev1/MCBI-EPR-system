@@ -1,43 +1,45 @@
-import gradio as gr
+import hmac
+import os
 import uuid
 from datetime import datetime
-import os
-import hmac
+from urllib.parse import quote
+
+import gradio as gr
 import psycopg2
 import qrcode
 
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+PORTAL_URL = "https://mcbi-epr-system.onrender.com"
 
 
 def make_qr(battery_id):
-    """Encode the battery ID as a QR image for a pilot label."""
-    return qrcode.make(battery_id).convert("RGB")
+    """QR кодоор батарейн бүртгэлийн хуудсыг нээнэ."""
+    url = f"{PORTAL_URL}/?battery_id={quote(battery_id, safe='')}"
+    return qrcode.make(url).convert("RGB")
 
 
 def init_database():
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS batteries (
-            id TEXT PRIMARY KEY,
-            company TEXT,
-            category TEXT,
-            chemistry TEXT,
-            weight DOUBLE PRECISION,
-            capacity DOUBLE PRECISION,
-            granularity TEXT,
-            model_id TEXT,
-            batch_number TEXT,
-            serial_number TEXT,
-            country TEXT,
-            manufacture_date TEXT,
-            status TEXT,
-            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+    with psycopg2.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS batteries (
+                    id TEXT PRIMARY KEY,
+                    company TEXT,
+                    category TEXT,
+                    chemistry TEXT,
+                    weight DOUBLE PRECISION,
+                    capacity DOUBLE PRECISION,
+                    granularity TEXT,
+                    model_id TEXT,
+                    batch_number TEXT,
+                    serial_number TEXT,
+                    country TEXT,
+                    manufacture_date TEXT,
+                    status TEXT,
+                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
 
 
 init_database()
@@ -59,62 +61,74 @@ def register_battery(
     registration_key
 ):
     expected_key = os.getenv("REGISTRATION_KEY")
-    if not expected_key or not hmac.compare_digest(registration_key or "", expected_key):
+
+    if not expected_key or not hmac.compare_digest(
+        registration_key or "", expected_key
+    ):
         raise gr.Error("Registration key is missing or incorrect.")
 
     battery_id = "MCBI-" + str(uuid.uuid4())[:8].upper()
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO batteries (
-            id, company, category, chemistry, weight, capacity,
-            granularity, model_id, batch_number, serial_number,
-            country, manufacture_date, status
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        battery_id, company, category, chemistry, weight, capacity,
-        granularity, model_id, batch_number, serial_number,
-        country, manufacture_date, status
-    ))
-    conn.commit()
-    cur.close()
-    conn.close()
+
+    with psycopg2.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO batteries (
+                    id, company, category, chemistry, weight, capacity,
+                    granularity, model_id, batch_number, serial_number,
+                    country, manufacture_date, status
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+            """, (
+                battery_id, company, category, chemistry, weight, capacity,
+                granularity, model_id, batch_number, serial_number,
+                country, manufacture_date, status
+            ))
 
     result = f"""
 # MCBI Battery Record
-**Battery ID:** {battery_id}
-**Company / Importer:** {company}
-**Category:** {category}
-**Chemistry:** {chemistry}
-**Weight:** {weight} kg
-**Capacity:** {capacity} Wh/Ah
-**Registration level:** {granularity}
-**Model / SKU:** {model_id}
-**Batch number:** {batch_number}
-**Serial number:** {serial_number}
-**Manufacturing country:** {country}
-**Manufacturing date:** {manufacture_date}
-**Lifecycle status:** {status}
+
+**Battery ID:** {battery_id}  
+**Company / Importer:** {company}  
+**Category:** {category}  
+**Chemistry:** {chemistry}  
+**Weight:** {weight} kg  
+**Capacity:** {capacity} Wh/Ah  
+**Registration level:** {granularity}  
+**Model / SKU:** {model_id}  
+**Batch number:** {batch_number}  
+**Serial number:** {serial_number}  
+**Manufacturing country:** {country}  
+**Manufacturing date:** {manufacture_date}  
+**Lifecycle status:** {status}  
 **Registered:** {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
 ---
-MCBI EPR Pilot Portal
+
+MCBI EPR Pilot Portal  
 Pilot / demonstration record
 """
+
     return battery_id, result, make_qr(battery_id)
 
 
 def find_battery(battery_id):
     battery_id = (battery_id or "").strip().upper()
+
     if not battery_id:
         return "Please enter a Battery ID.", None
 
     with psycopg2.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, company, category, chemistry, weight, capacity,
-                       granularity, model_id, batch_number, serial_number,
-                       country, manufacture_date, status, registered_at
-                FROM batteries WHERE id = %s
+                SELECT
+                    id, company, category, chemistry, weight, capacity,
+                    granularity, model_id, batch_number, serial_number,
+                    country, manufacture_date, status, registered_at
+                FROM batteries
+                WHERE id = %s
             """, (battery_id,))
             record = cur.fetchone()
 
@@ -122,24 +136,52 @@ def find_battery(battery_id):
         return "No battery record found for this ID.", None
 
     labels = (
-        "Battery ID", "Company / Importer", "Category", "Chemistry",
-        "Weight (kg)", "Capacity (Wh/Ah)", "Registration level",
-        "Model / SKU", "Batch number", "Serial number",
-        "Manufacturing country", "Manufacturing date", "Lifecycle status",
+        "Battery ID",
+        "Company / Importer",
+        "Category",
+        "Chemistry",
+        "Weight (kg)",
+        "Capacity (Wh/Ah)",
+        "Registration level",
+        "Model / SKU",
+        "Batch number",
+        "Serial number",
+        "Manufacturing country",
+        "Manufacturing date",
+        "Lifecycle status",
         "Registered"
     )
+
     details = "\n".join(
         f"{label}: {value if value is not None else '—'}"
         for label, value in zip(labels, record)
     )
+
     return details, make_qr(record[0])
 
 
+def load_battery_from_url(request: gr.Request):
+    battery_id = (
+        dict(request.query_params).get("battery_id", "")
+        if request else ""
+    )
+    battery_id = battery_id.strip().upper()
+
+    if not battery_id:
+        return "", "", None
+
+    details, qr = find_battery(battery_id)
+    return battery_id, details, qr
+
+
 with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
+
     gr.Markdown("""
     # 🔋 MCBI EPR Pilot Portal
-    **Mongolia Circular Battery Initiative**
+
+    **Mongolia Circular Battery Initiative**  
     Battery registration • Identification • Lifecycle tracking
+
     ### Battery Registration
     """)
 
@@ -200,7 +242,8 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
         interactive=False
     )
     record_output = gr.Markdown()
-    gr.Markdown("The QR code contains the Battery ID for pilot labels.")
+
+    gr.Markdown("Scan the QR code to open this battery's public record.")
     qr_output = gr.Image(
         label="Battery ID QR Code",
         type="pil",
@@ -210,14 +253,29 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
     register_button.click(
         fn=register_battery,
         inputs=[
-            company, category, chemistry, weight, capacity,
-            granularity, model_id, batch_number, serial_number,
-            country, manufacture_date, status, registration_key
+            company,
+            category,
+            chemistry,
+            weight,
+            capacity,
+            granularity,
+            model_id,
+            batch_number,
+            serial_number,
+            country,
+            manufacture_date,
+            status,
+            registration_key
         ],
-        outputs=[battery_id_output, record_output, qr_output]
+        outputs=[
+            battery_id_output,
+            record_output,
+            qr_output
+        ]
     )
 
     gr.Markdown("### Find a Registered Battery")
+
     lookup_id = gr.Textbox(
         label="Battery ID",
         placeholder="MCBI-8B675499"
@@ -233,16 +291,29 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
         type="pil",
         interactive=False
     )
+
     lookup_button.click(
         fn=find_battery,
         inputs=lookup_id,
         outputs=[lookup_result, lookup_qr]
     )
 
+    demo.load(
+        fn=load_battery_from_url,
+        inputs=[],
+        outputs=[lookup_id, lookup_result, lookup_qr]
+    )
+
     gr.Markdown("""
     ---
-    **MCBI EPR Pilot — N-064**
+
+    **MCBI EPR Pilot — N-064**  
     Prototype for testing battery identification and EPR data flows.
     """)
 
-demo.launch(server_name="0.0.0.0", server_port=10000, ssr_mode=False)
+
+demo.launch(
+    server_name="0.0.0.0",
+    server_port=10000,
+    ssr_mode=False
+)
