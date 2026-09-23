@@ -86,6 +86,37 @@ Pilot / demonstration record
     return battery_id, result
 
 
+def find_battery(battery_id):
+    battery_id = (battery_id or "").strip().upper()
+    if not battery_id:
+        return "Please enter a Battery ID."
+
+    with psycopg2.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, company, category, chemistry, weight, capacity,
+                       granularity, model_id, batch_number, serial_number,
+                       country, manufacture_date, status, registered_at
+                FROM batteries WHERE id = %s
+            """, (battery_id,))
+            record = cur.fetchone()
+
+    if record is None:
+        return "No battery record found for this ID."
+
+    labels = (
+        "Battery ID", "Company / Importer", "Category", "Chemistry",
+        "Weight (kg)", "Capacity (Wh/Ah)", "Registration level",
+        "Model / SKU", "Batch number", "Serial number",
+        "Manufacturing country", "Manufacturing date", "Lifecycle status",
+        "Registered"
+    )
+    return "\n".join(
+        f"{label}: {value if value is not None else '—'}"
+        for label, value in zip(labels, record)
+    )
+
+
 with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
 
     gr.Markdown("""
@@ -179,6 +210,12 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
             record_output
         ]
     )
+
+    gr.Markdown("### Find a Registered Battery")
+    lookup_id = gr.Textbox(label="Battery ID", placeholder="MCBI-8B675499")
+    lookup_button = gr.Button("Find Battery")
+    lookup_result = gr.Textbox(label="Stored Battery Record", lines=15, interactive=False)
+    lookup_button.click(fn=find_battery, inputs=lookup_id, outputs=lookup_result)
 
     gr.Markdown("""
     ---
