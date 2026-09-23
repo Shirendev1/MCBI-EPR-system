@@ -1,2 +1,3 @@
 gradio
 psycopg2-binary
+qrcode[pil]
