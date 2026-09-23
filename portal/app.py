@@ -14,7 +14,7 @@ PORTAL_URL = "https://mcbi-epr-system.onrender.com"
 
 
 def make_qr(battery_id):
-    """QR кодоор батарейн бүртгэлийн хуудсыг нээнэ."""
+    """QR кодоор батарейн нийтийн бүртгэлийг нээнэ."""
     url = f"{PORTAL_URL}/?battery_id={quote(battery_id, safe='')}"
     return qrcode.make(url).convert("RGB")
 
@@ -123,10 +123,7 @@ def find_battery(battery_id):
     with psycopg2.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT
-                    id, company, category, chemistry, weight, capacity,
-                    granularity, model_id, batch_number, serial_number,
-                    country, manufacture_date, status, registered_at
+                SELECT id, category, chemistry, status
                 FROM batteries
                 WHERE id = %s
             """, (battery_id,))
@@ -137,19 +134,9 @@ def find_battery(battery_id):
 
     labels = (
         "Battery ID",
-        "Company / Importer",
         "Category",
         "Chemistry",
-        "Weight (kg)",
-        "Capacity (Wh/Ah)",
-        "Registration level",
-        "Model / SKU",
-        "Batch number",
-        "Serial number",
-        "Manufacturing country",
-        "Manufacturing date",
-        "Lifecycle status",
-        "Registered"
+        "Lifecycle status"
     )
 
     details = "\n".join(
@@ -243,7 +230,7 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
     )
     record_output = gr.Markdown()
 
-    gr.Markdown("Scan the QR code to open this battery's public record.")
+    gr.Markdown("Scan the QR code to open this battery's limited public record.")
     qr_output = gr.Image(
         label="Battery ID QR Code",
         type="pil",
@@ -282,8 +269,8 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
     )
     lookup_button = gr.Button("Find Battery")
     lookup_result = gr.Textbox(
-        label="Stored Battery Record",
-        lines=15,
+        label="Public Battery Record",
+        lines=5,
         interactive=False
     )
     lookup_qr = gr.Image(
