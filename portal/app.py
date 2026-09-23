@@ -1,4 +1,3 @@
-import gradio as gr
 import uuid
 from datetime import datetime
 import os
