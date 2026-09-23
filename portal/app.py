@@ -2,6 +2,7 @@ import gradio as gr
 import uuid
 from datetime import datetime
 import os
+import hmac
 import psycopg2
 import qrcode
 
@@ -54,13 +55,18 @@ def register_battery(
     serial_number,
     country,
     manufacture_date,
-    status
+    status,
+    registration_key
 ):
+    expected_key = os.getenv("REGISTRATION_KEY")
+    if not expected_key or not hmac.compare_digest(registration_key or "", expected_key):
+        raise gr.Error("Registration key is missing or incorrect.")
+
     battery_id = "MCBI-" + str(uuid.uuid4())[:8].upper()
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO batteries(
+        INSERT INTO batteries (
             id, company, category, chemistry, weight, capacity,
             granularity, model_id, batch_number, serial_number,
             country, manufacture_date, status
@@ -91,7 +97,7 @@ def register_battery(
 **Lifecycle status:** {status}
 **Registered:** {datetime.now().strftime("%Y-%m-%d %H:%M")}
 ---
-MCBI EPR Pilot Portal  
+MCBI EPR Pilot Portal
 Pilot / demonstration record
 """
     return battery_id, result, make_qr(battery_id)
@@ -130,7 +136,6 @@ def find_battery(battery_id):
 
 
 with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
-
     gr.Markdown("""
     # 🔋 MCBI EPR Pilot Portal
     **Mongolia Circular Battery Initiative**
@@ -184,6 +189,10 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
         label="Lifecycle Status"
     )
 
+    registration_key = gr.Textbox(
+        label="Registration key (admin only)",
+        type="password"
+    )
     register_button = gr.Button("Register Battery")
 
     battery_id_output = gr.Textbox(
@@ -203,7 +212,7 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
         inputs=[
             company, category, chemistry, weight, capacity,
             granularity, model_id, batch_number, serial_number,
-            country, manufacture_date, status
+            country, manufacture_date, status, registration_key
         ],
         outputs=[battery_id_output, record_output, qr_output]
     )
