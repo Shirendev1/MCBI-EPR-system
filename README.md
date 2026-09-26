@@ -131,10 +131,33 @@ For local setup:
    python portal/app.py
    ```
 
+### Recommended local workflow
+
+The repository includes Docker Compose, a database smoke check, and a Makefile for a short end-to-end setup:
+
+```bash
+make up
+make check-db
+make run
+# Open http://localhost:10000 in a browser, then stop PostgreSQL when finished:
+make down
+```
+
+Equivalent commands for users who do not use Make:
+
+```bash
+docker compose up -d
+python scripts/check_db.py
+python portal/app.py
+# Stop PostgreSQL when finished:
+docker compose down
+```
+
+Before running the local workflow, copy `.env.example` to `.env` and set a private `REGISTRATION_KEY`. Export the variables in your shell, or load them using your preferred environment-variable tool. The smoke check requires the Python dependencies from `portal/requirements.txt` to be installed. The `make check-db` command verifies that PostgreSQL is reachable through `DATABASE_URL`; `init_database()` then creates the required tables when the portal starts.
+
 Notes
 
-- PostgreSQL must be running and reachable using the `DATABASE_URL` you provide. You can start a local Postgres instance with Docker if you prefer (for example, `docker run --name mcbi-postgres -e POSTGRES_PASSWORD=mcbi_pass -e POSTGRES_USER=mcbi -e POSTGRES_DB=mcbi -p 5432:5432 -d postgres`).
-- The application calls `init_database()` on startup; it will create the required tables automatically if they do not already exist.
+- PostgreSQL must be running and reachable using the `DATABASE_URL` you provide. The included `docker-compose.yml` starts a matching local PostgreSQL service.
 - Do not commit real secrets. The `REGISTRATION_KEY` is sensitive and must never be committed to GitHub. Use environment variables or your deployment platform's secret management.
 - On Render (or other PaaS), set `DATABASE_URL`, `REGISTRATION_KEY`, and `PORTAL_URL` as environment variables/secrets in the service settings instead of committing them to the repo.
 
