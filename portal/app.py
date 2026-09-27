@@ -18,7 +18,7 @@ PORTAL_URL = os.getenv(
     "https://mcbi-epr-system.onrender.com"
 ).rstrip("/")
 
-CATEGORIES = ("EV", "LMT", "Stationary", "Industrial", "Consumer")
+CATEGORIES = ("SLI", "EV", "LMT", "Stationary", "Industrial", "Consumer")
 CHEMISTRIES = ("LFP", "NMC", "NCA", "LCO", "LMO", "Lead-acid", "Other")
 LEVELS = ("SKU", "Batch", "Unit")
 CAPACITY_UNITS = ("Wh", "Ah")
@@ -426,6 +426,14 @@ def load_battery_from_url(request: gr.Request):
     return battery_id, details, qr
 
 
+def clear_battery_fields():
+    return (
+        None, None, None, None, None,
+        None, "", "", "",
+        "", "", "original"
+    )
+
+
 init_database()
 
 
@@ -500,7 +508,8 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 )
                 category = gr.Dropdown(
                     list(CATEGORIES),
-                    label="Ангилал · Category"
+                    label="Ангилал · Category",
+                    info="SLI → машины асаагуурын батарей · car starter battery"
                 )
             with gr.Row():
                 chemistry = gr.Dropdown(
@@ -567,6 +576,12 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     height=260
                 )
 
+            battery_fields = [
+                category, chemistry, weight, capacity, capacity_unit,
+                granularity, model_id, batch_number, serial_number,
+                country, manufacture_date, status
+            ]
+
             register_button.click(
                 fn=register_battery,
                 inputs=[
@@ -576,6 +591,22 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     registration_key
                 ],
                 outputs=[battery_id_output, record_output, qr_output]
+            ).success(
+                # Clear the battery fields after a successful registration so
+                # the next battery starts from an empty form. Company and the
+                # registration key stay filled for the next entry.
+                fn=clear_battery_fields,
+                inputs=[],
+                outputs=battery_fields
+            )
+
+            gr.Button(
+                "🧹 Маягт цэвэрлэх · Clear form",
+                variant="secondary"
+            ).click(
+                fn=clear_battery_fields,
+                inputs=[],
+                outputs=battery_fields
             )
 
         # ---------- 3. Admin ----------
