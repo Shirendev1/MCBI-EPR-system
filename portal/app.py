@@ -429,138 +429,229 @@ def load_battery_from_url(request: gr.Request):
 init_database()
 
 
-with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
-    gr.Markdown("""
-    # 🔋 MCBI EPR Pilot Portal
+CSS = """
+.gradio-container { max-width: 880px !important; margin: 0 auto !important; }
+#mcbi-header h1 { margin-bottom: 0.2em; }
+#mcbi-footer { opacity: 0.75; font-size: 0.9em; }
+"""
 
-    **Mongolia Circular Battery Initiative**
 
-    Battery registration • Identification • Lifecycle tracking
-
-    ### Battery Registration
-    """)
-
-    with gr.Row():
-        company = gr.Textbox(
-            label="Company / Importer",
-            placeholder="Company name"
-        )
-        category = gr.Dropdown(
-            list(CATEGORIES),
-            label="Battery Category"
-        )
-
-    with gr.Row():
-        chemistry = gr.Dropdown(
-            list(CHEMISTRIES),
-            label="Chemistry"
-        )
-        granularity = gr.Dropdown(
-            list(LEVELS),
-            label="Registration Level"
-        )
-
-    with gr.Row():
-        weight = gr.Number(label="Weight (kg)")
-        capacity = gr.Number(label="Capacity")
-        capacity_unit = gr.Dropdown(
-            list(CAPACITY_UNITS),
-            label="Capacity unit"
-        )
-
-    gr.Markdown("### Identification")
-
-    with gr.Row():
-        model_id = gr.Textbox(label="Model / SKU")
-        batch_number = gr.Textbox(label="Batch Number")
-        serial_number = gr.Textbox(label="Serial Number")
-
-    gr.Markdown("### Manufacturing")
-
-    with gr.Row():
-        country = gr.Textbox(label="Country of Manufacture")
-        manufacture_date = gr.Textbox(
-            label="Manufacturing Date",
-            placeholder="YYYY-MM"
-        )
-
-    status = gr.Dropdown(
-        list(STATUSES),
-        value="original",
-        label="Lifecycle Status"
-    )
-
-    registration_key = gr.Textbox(
-        label="Registration key (admin only)",
-        type="password"
-    )
-    register_button = gr.Button("Register Battery")
-
-    battery_id_output = gr.Textbox(
-        label="Generated Battery ID",
-        interactive=False
-    )
-    record_output = gr.Textbox(
-        label="New battery record (private)",
-        lines=15,
-        interactive=False
-    )
+with gr.Blocks(title="MCBI EPR Portal") as demo:
     gr.Markdown(
-        "Scan the QR code to open this battery's limited public record."
-    )
-    qr_output = gr.Image(
-        label="Battery ID QR Code",
-        type="pil",
-        interactive=False
+        """
+        # 🔋 MCBI EPR Portal
+        **Монголын тойрог батарейн санаачилга · Mongolia Circular Battery Initiative**
+
+        Батарей бүртгэх, таних, амьдралын мөчлөгийг хянах туршилтын систем ·
+        Battery registration, identification and lifecycle tracking (pilot)
+        """,
+        elem_id="mcbi-header"
     )
 
-    register_button.click(
-        fn=register_battery,
-        inputs=[
-            company,
-            category,
-            chemistry,
-            weight,
-            capacity,
-            capacity_unit,
-            granularity,
-            model_id,
-            batch_number,
-            serial_number,
-            country,
-            manufacture_date,
-            status,
-            registration_key
-        ],
-        outputs=[
-            battery_id_output,
-            record_output,
-            qr_output
-        ]
-    )
+    with gr.Tabs():
 
-    gr.Markdown("### Find a Registered Battery")
+        # ---------- 1. Public lookup (default tab; QR links open here) ----------
+        with gr.Tab("🔍 Хайх / Find", id="find"):
+            gr.Markdown(
+                "Батарейн ID-г оруулах эсвэл QR кодыг уншуулж нийтийн "
+                "мэдээллийг харна. · Enter a Battery ID or scan its QR code."
+            )
+            lookup_id = gr.Textbox(
+                label="Батарейн ID · Battery ID",
+                placeholder="MCBI-8B675499..."
+            )
+            lookup_button = gr.Button("Хайх · Find", variant="primary")
+            with gr.Row():
+                lookup_result = gr.Textbox(
+                    label="Нийтийн мэдээлэл · Public record",
+                    lines=5,
+                    interactive=False
+                )
+                lookup_qr = gr.Image(
+                    label="QR код · QR code",
+                    type="pil",
+                    interactive=False,
+                    height=220
+                )
 
-    lookup_id = gr.Textbox(
-        label="Battery ID",
-        placeholder="MCBI-8B675499"
-    )
-    lookup_button = gr.Button("Find Battery")
-    lookup_result = gr.Textbox(
-        label="Public Battery Record",
-        lines=5,
-        interactive=False
-    )
-    lookup_qr = gr.Image(
-        label="Stored Battery ID QR Code",
-        type="pil",
-        interactive=False
-    )
+            lookup_button.click(
+                fn=find_battery,
+                inputs=lookup_id,
+                outputs=[lookup_result, lookup_qr]
+            )
+            lookup_id.submit(
+                fn=find_battery,
+                inputs=lookup_id,
+                outputs=[lookup_result, lookup_qr]
+            )
 
-    lookup_button.click(
-        fn=find_battery,
-        inputs=lookup_id,
-        outputs=[lookup_result, lookup_qr]
+        # ---------- 2. Registration (needs registration key) ----------
+        with gr.Tab("➕ Бүртгэх / Register", id="register"):
+            gr.Markdown(
+                "Бүртгэл хийхэд бүртгэлийн түлхүүр шаардлагатай. · "
+                "A registration key is required."
+            )
+
+            gr.Markdown("#### Үндсэн мэдээлэл · Basic information")
+            with gr.Row():
+                company = gr.Textbox(
+                    label="Компани / Импортлогч · Company / Importer",
+                    placeholder="Компанийн нэр · Company name"
+                )
+                category = gr.Dropdown(
+                    list(CATEGORIES),
+                    label="Ангилал · Category"
+                )
+            with gr.Row():
+                chemistry = gr.Dropdown(
+                    list(CHEMISTRIES),
+                    label="Химийн төрөл · Chemistry"
+                )
+                granularity = gr.Dropdown(
+                    list(LEVELS),
+                    label="Бүртгэлийн түвшин · Registration level",
+                    info="SKU → загвар, Batch → багц, Unit → ширхэг"
+                )
+            with gr.Row():
+                weight = gr.Number(label="Жин (кг) · Weight (kg)")
+                capacity = gr.Number(label="Багтаамж · Capacity")
+                capacity_unit = gr.Dropdown(
+                    list(CAPACITY_UNITS),
+                    label="Нэгж · Unit"
+                )
+
+            gr.Markdown("#### Таних мэдээлэл · Identification")
+            with gr.Row():
+                model_id = gr.Textbox(label="Загвар / SKU · Model / SKU")
+                batch_number = gr.Textbox(label="Багцын дугаар · Batch number")
+                serial_number = gr.Textbox(label="Серийн дугаар · Serial number")
+
+            gr.Markdown("#### Үйлдвэрлэл · Manufacturing")
+            with gr.Row():
+                country = gr.Textbox(
+                    label="Үйлдвэрлэсэн улс · Country of manufacture"
+                )
+                manufacture_date = gr.Textbox(
+                    label="Үйлдвэрлэсэн огноо · Manufacturing date",
+                    placeholder="YYYY-MM (2026-09)"
+                )
+
+            status = gr.Dropdown(
+                list(STATUSES),
+                value="original",
+                label="Амьдралын мөчлөгийн төлөв · Lifecycle status"
+            )
+            registration_key = gr.Textbox(
+                label="Бүртгэлийн түлхүүр · Registration key",
+                type="password"
+            )
+            register_button = gr.Button(
+                "Батарей бүртгэх · Register battery",
+                variant="primary"
+            )
+
+            battery_id_output = gr.Textbox(
+                label="Шинэ батарейн ID · New Battery ID",
+                interactive=False
+            )
+            with gr.Row():
+                record_output = gr.Textbox(
+                    label="Бүртгэлийн дэлгэрэнгүй (нууц) · Record (private)",
+                    lines=14,
+                    interactive=False
+                )
+                qr_output = gr.Image(
+                    label="QR код — батарейд наах · QR code for the label",
+                    type="pil",
+                    interactive=False,
+                    height=260
+                )
+
+            register_button.click(
+                fn=register_battery,
+                inputs=[
+                    company, category, chemistry, weight, capacity,
+                    capacity_unit, granularity, model_id, batch_number,
+                    serial_number, country, manufacture_date, status,
+                    registration_key
+                ],
+                outputs=[battery_id_output, record_output, qr_output]
+            )
+
+        # ---------- 3. Admin ----------
+        with gr.Tab("⚙️ Админ / Admin", id="admin"):
+            gr.Markdown(
+                "Түлхүүрээ бусадтай хуваалцах, нийтийн компьютер дээр "
+                "үлдээхгүй байгаарай. · Do not share your key or leave it "
+                "on a shared computer."
+            )
+            admin_key = gr.Textbox(
+                label="Админ түлхүүр · Admin key",
+                type="password"
+            )
+
+            recent_records = gr.Textbox(
+                label="Сүүлийн бүртгэлүүд · Recent registrations",
+                lines=10,
+                interactive=False
+            )
+            gr.Button("Бүртгэлүүдийг харах · Show registrations").click(
+                fn=admin_list_batteries,
+                inputs=admin_key,
+                outputs=recent_records
+            )
+
+            admin_id = gr.Textbox(label="Батарейн ID · Battery ID")
+
+            with gr.Row():
+                view_button = gr.Button("Дэлгэрэнгүй · Private record")
+                history_button = gr.Button("Түүх · History")
+            admin_result = gr.Textbox(
+                label="Нууц мэдээлэл · Private record",
+                lines=14,
+                interactive=False
+            )
+            history_result = gr.Textbox(
+                label="Бүртгэл ба төлөвийн түүх · History",
+                lines=8,
+                interactive=False
+            )
+            view_button.click(
+                fn=admin_find_battery,
+                inputs=[admin_id, admin_key],
+                outputs=admin_result
+            )
+            history_button.click(
+                fn=admin_history,
+                inputs=[admin_id, admin_key],
+                outputs=history_result
+            )
+
+            gr.Markdown("#### Төлөв өөрчлөх · Change status")
+            with gr.Row():
+                new_status = gr.Dropdown(
+                    list(STATUSES),
+                    label="Шинэ төлөв · New status"
+                )
+                status_reason = gr.Textbox(
+                    label="Шалтгаан · Reason"
+                )
+            status_result = gr.Textbox(
+                label="Үр дүн · Result",
+                interactive=False
+            )
+            gr.Button("Төлөв шинэчлэх · Update status").click(
+                fn=change_status,
+                inputs=[admin_id, new_status, status_reason, admin_key],
+                outputs=status_result
+            )
+
+    gr.Markdown(
+        """
+        ---
+        **MCBI EPR Pilot — N-064** · Туршилтын хувилбар · Pilot prototype
+        """,
+        elem_id="mcbi-footer"
     )
 
     demo.load(
@@ -569,89 +660,14 @@ with gr.Blocks(title="MCBI EPR Pilot Portal") as demo:
         outputs=[lookup_id, lookup_result, lookup_qr]
     )
 
-    with gr.Accordion(
-        "Admin: private record and lifecycle history",
-        open=False
-    ):
-        gr.Markdown(
-            "Use your existing registration key. "
-            "Do not share it or leave it on a shared computer."
-        )
-
-        admin_id = gr.Textbox(label="Battery ID")
-        admin_key = gr.Textbox(
-            label="Admin key",
-            type="password"
-        )
-
-        recent_records = gr.Textbox(
-            label="Recent battery registrations",
-            lines=12,
-            interactive=False
-        )
-        gr.Button("Show registered batteries").click(
-            fn=admin_list_batteries,
-            inputs=admin_key,
-            outputs=recent_records
-        )
-
-        admin_result = gr.Textbox(
-            label="Private battery record",
-            lines=15,
-            interactive=False
-        )
-        gr.Button("View private record").click(
-            fn=admin_find_battery,
-            inputs=[admin_id, admin_key],
-            outputs=admin_result
-        )
-
-        new_status = gr.Dropdown(
-            list(STATUSES),
-            label="New lifecycle status"
-        )
-        status_reason = gr.Textbox(
-            label="Reason for status change"
-        )
-        status_result = gr.Textbox(
-            label="Update result",
-            interactive=False
-        )
-        gr.Button("Update status").click(
-            fn=change_status,
-            inputs=[
-                admin_id,
-                new_status,
-                status_reason,
-                admin_key
-            ],
-            outputs=status_result
-        )
-
-        history_result = gr.Textbox(
-            label="Registration and status history",
-            lines=8,
-            interactive=False
-        )
-        gr.Button("View history").click(
-            fn=admin_history,
-            inputs=[admin_id, admin_key],
-            outputs=history_result
-        )
-
-    gr.Markdown("""
-    ---
-
-    **MCBI EPR Pilot — N-064**
-
-    Prototype for testing battery identification and EPR data flows.
-    """)
-
 
 port = int(os.getenv("PORT", "10000"))
 
 demo.launch(
     server_name="0.0.0.0",
     server_port=port,
-    ssr_mode=False
+    ssr_mode=False,
+    pwa=True,
+    css=CSS,
+    theme=gr.themes.Soft(primary_hue="emerald")
 )
