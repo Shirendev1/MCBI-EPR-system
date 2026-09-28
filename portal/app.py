@@ -4,7 +4,8 @@ import os
 import re
 import uuid
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import gradio as gr
@@ -23,6 +24,33 @@ CHEMISTRIES = ("LFP", "NMC", "NCA", "LCO", "LMO", "Lead-acid", "Other")
 LEVELS = ("SKU", "Batch", "Unit")
 CAPACITY_UNITS = ("Wh", "Ah")
 STATUSES = ("original", "repurposed", "re-used", "remanufactured", "waste")
+
+LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TIMEZONE", "Asia/Ulaanbaatar"))
+
+# Fields an admin may correct after registration: label -> column
+EDITABLE_FIELDS = {
+    "Компани · Company": "company",
+    "Ангилал · Category": "category",
+    "Химийн төрөл · Chemistry": "chemistry",
+    "Жин (кг) · Weight (kg)": "weight",
+    "Багтаамж · Capacity": "capacity",
+    "Нэгж · Capacity unit": "capacity_unit",
+    "Бүртгэлийн түвшин · Registration level": "granularity",
+    "Загвар / SKU · Model / SKU": "model_id",
+    "Багцын дугаар · Batch number": "batch_number",
+    "Серийн дугаар · Serial number": "serial_number",
+    "Үйлдвэрлэсэн улс · Country": "country",
+    "Үйлдвэрлэсэн огноо · Manufacturing date": "manufacture_date",
+}
+
+
+def local_time(value):
+    """Show a stored timestamp in local (Ulaanbaatar) time."""
+    if value is None:
+        return "—"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 def require_admin_key(key):
@@ -209,7 +237,7 @@ def register_battery(
         f"Manufacturing country: {country}",
         f"Manufacturing date: {manufacture_date}",
         f"Lifecycle status: {status}",
-        f"Registered: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        f"Registered: {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M')}"
     ))
 
     return battery_id, details, make_qr(battery_id)
@@ -258,7 +286,8 @@ def admin_find_battery(battery_id, admin_key):
                     id, company, category, chemistry, weight,
                     capacity, capacity_unit, granularity, model_id,
                     batch_number, serial_number, country,
-                    manufacture_date, status, registered_at
+                    manufacture_date, status,
+                    registered_at::timestamptz
                 FROM batteries
                 WHERE id = %s
             """, (battery_id,))
@@ -285,9 +314,12 @@ def admin_find_battery(battery_id, admin_key):
         "Registered"
     )
 
+    values = list(record)
+    values[-1] = local_time(values[-1])
+
     return "\n".join(
         f"{label}: {value if value is not None else '—'}"
-        for label, value in zip(labels, record)
+        for label, value in zip(labels, values)
     )
 
 
@@ -300,7 +332,8 @@ def admin_list_batteries(admin_key):
             total = cur.fetchone()[0]
 
             cur.execute("""
-                SELECT id, company, category, model_id, registered_at
+                SELECT id, company, category, model_id, status,
+                       registered_at::timestamptz
                 FROM batteries
                 ORDER BY registered_at DESC, id DESC
                 LIMIT 50
@@ -317,8 +350,9 @@ def admin_list_batteries(admin_key):
 
     rows.extend(
         f"{battery_id} | {company or '—'} | "
-        f"{category or '—'} | {model_id or '—'} | {registered_at}"
-        for battery_id, company, category, model_id, registered_at
+        f"{category or '—'} | {model_id or '—'} | "
+        f"{status or '—'} | {local_time(registered_at)}"
+        for battery_id, company, category, model_id, status, registered_at
         in records
     )
 
@@ -404,12 +438,83 @@ def admin_history(battery_id, admin_key):
         return "No recorded events for this Battery ID."
 
     return "\n".join(
-        f"{occurred_at}: {event_type} "
+        f"{local_time(occurred_at)}: {event_type} "
         f"({old or '—'} → {new or '—'})"
         + (f" — {reason}" if reason else "")
         for event_type, old, new, reason, occurred_at
         in events
     )
+
+
+def edit_battery(battery_id, field_label, new_value, reason, admin_key):
+    require_admin_key(admin_key)
+    battery_id = (battery_id or "").strip().upper()
+
+    if not battery_id:
+        raise gr.Error("Enter a Battery ID.")
+    if field_label not in EDITABLE_FIELDS:
+        raise gr.Error("Select the field to correct.")
+
+    column = EDITABLE_FIELDS[field_label]
+    reason = required_text(reason, "Reason")
+    new_value = (new_value or "").strip()
+
+    if column in ("company", "country"):
+        new_value = required_text(new_value, field_label)
+    elif column == "category" and new_value not in CATEGORIES:
+        raise gr.Error("Category must be one of: " + ", ".join(CATEGORIES))
+    elif column == "chemistry" and new_value not in CHEMISTRIES:
+        raise gr.Error("Chemistry must be one of: " + ", ".join(CHEMISTRIES))
+    elif column == "granularity" and new_value not in LEVELS:
+        raise gr.Error("Registration level must be one of: " + ", ".join(LEVELS))
+    elif column == "capacity_unit" and new_value not in CAPACITY_UNITS:
+        raise gr.Error("Capacity unit must be one of: " + ", ".join(CAPACITY_UNITS))
+    elif column in ("weight", "capacity"):
+        try:
+            number = float(new_value.replace(",", "."))
+        except ValueError:
+            raise gr.Error(f"{field_label} must be a number.")
+        new_value = positive_number(number, field_label)
+    elif column == "manufacture_date" and not re.fullmatch(
+        r"\d{4}-(0[1-9]|1[0-2])", new_value
+    ):
+        raise gr.Error(
+            "Manufacturing Date must use YYYY-MM, for example 2026-09."
+        )
+
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                # column comes from the fixed EDITABLE_FIELDS whitelist
+                cur.execute(
+                    f"SELECT {column} FROM batteries WHERE id = %s FOR UPDATE",
+                    (battery_id,)
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise gr.Error("No battery record found for this ID.")
+                old_value = row[0]
+
+                if str(old_value) == str(new_value):
+                    return "No change: the new value is the same as the current one."
+
+                cur.execute(
+                    f"UPDATE batteries SET {column} = %s WHERE id = %s",
+                    (new_value, battery_id)
+                )
+                cur.execute("""
+                    INSERT INTO battery_events (
+                        battery_id, event_type, old_value, new_value, reason
+                    )
+                    VALUES (%s, 'edited', %s, %s, %s)
+                """, (
+                    battery_id,
+                    f"{column}: {old_value if old_value is not None else '—'}",
+                    f"{column}: {new_value}",
+                    reason
+                ))
+
+    return f"Updated {column}: {old_value} → {new_value}."
 
 
 def load_battery_from_url(request: gr.Request):
@@ -675,6 +780,34 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 fn=change_status,
                 inputs=[admin_id, new_status, status_reason, admin_key],
                 outputs=status_result
+            )
+
+            gr.Markdown(
+                "#### Бүртгэл засах · Correct a record\n"
+                "Алдаатай бичсэн талбарыг засна. Хуучин утга түүхэнд "
+                "хадгалагдана. · Fix a mistyped field; the old value is "
+                "kept in the history."
+            )
+            with gr.Row():
+                edit_field = gr.Dropdown(
+                    list(EDITABLE_FIELDS),
+                    label="Засах талбар · Field"
+                )
+                edit_value = gr.Textbox(
+                    label="Зөв утга · Correct value"
+                )
+            edit_reason = gr.Textbox(
+                label="Шалтгаан · Reason",
+                placeholder="Жишээ нь: Багтаамжийг буруу бичсэн"
+            )
+            edit_result = gr.Textbox(
+                label="Үр дүн · Result",
+                interactive=False
+            )
+            gr.Button("Засвар хадгалах · Save correction").click(
+                fn=edit_battery,
+                inputs=[admin_id, edit_field, edit_value, edit_reason, admin_key],
+                outputs=edit_result
             )
 
     gr.Markdown(
