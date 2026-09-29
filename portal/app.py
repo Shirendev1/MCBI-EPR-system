@@ -2,6 +2,7 @@ import hmac
 import math
 import os
 import re
+import tempfile
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
@@ -77,9 +78,80 @@ def positive_number(value, label):
     return value
 
 
+def record_link(battery_id):
+    """Public, shareable link that opens this battery's record."""
+    return f"{PORTAL_URL}/?battery_id={quote(battery_id, safe='')}"
+
+
 def make_qr(battery_id):
-    url = f"{PORTAL_URL}/?battery_id={quote(battery_id, safe='')}"
-    return qrcode.make(url).convert("RGB")
+    return qrcode.make(record_link(battery_id)).convert("RGB")
+
+
+QR_DIR = os.path.join(tempfile.gettempdir(), "mcbi_qr")
+
+
+def save_qr_file(battery_id, image):
+    """Save the QR image as a PNG so it can be downloaded by name."""
+    os.makedirs(QR_DIR, exist_ok=True)
+    path = os.path.join(QR_DIR, f"{battery_id}.png")
+    image.save(path, format="PNG")
+    return path
+
+
+REQUIRED = " *"
+
+# Which identification fields each registration level uses:
+# field -> required?  Fields not listed are hidden and left empty.
+LEVEL_FIELDS = {
+    "SKU": {"model_id": True},
+    "Batch": {"model_id": False, "batch_number": True},
+    "Unit": {"model_id": False, "batch_number": False, "serial_number": True},
+}
+
+ID_LABELS = {
+    "model_id": "Загвар / SKU · Model / SKU",
+    "batch_number": "Багцын дугаар · Batch number",
+    "serial_number": "Серийн дугаар · Serial number",
+}
+
+LEVEL_HINTS = {
+    None: (
+        "ℹ️ Эхлээд **бүртгэлийн түвшнээ** сонгоно уу — бөглөх талбарууд "
+        "түүнээс хамаарна. · First choose a **registration level**; the "
+        "fields below depend on it."
+    ),
+    "SKU": (
+        "ℹ️ **SKU** — нэг загварыг бүхэлд нь бүртгэнэ. Зөвхөн загварын "
+        "дугаар хэрэгтэй, **серийн дугаар хэрэггүй**. · Registers a whole "
+        "battery model. Only the model / SKU is needed — **no serial number**."
+    ),
+    "Batch": (
+        "ℹ️ **Batch** — нэг үйлдвэрлэлийн багцыг бүртгэнэ. **Багцын дугаар "
+        "заавал**, загвар нь сонголтоор. · Registers one production batch. "
+        "**Batch number is required**; model is optional."
+    ),
+    "Unit": (
+        "ℹ️ **Unit** — нэг ширхэг батарейг бүртгэнэ. **Серийн дугаар "
+        "заавал**, загвар ба багц сонголтоор. · Registers a single battery. "
+        "**Serial number is required**; model and batch are optional."
+    ),
+}
+
+
+def id_field_updates(level):
+    """Show only the identification fields the chosen level needs."""
+    fields = LEVEL_FIELDS.get(level, {})
+    updates = []
+    for name, label in ID_LABELS.items():
+        if name in fields:
+            updates.append(gr.update(
+                visible=True,
+                label=label + (REQUIRED if fields[name] else " (сонголтоор · optional)")
+            ))
+        else:
+            updates.append(gr.update(visible=False, value=""))
+    updates.append(LEVEL_HINTS.get(level, LEVEL_HINTS[None]))
+    return updates
 
 
 def init_database():
@@ -180,6 +252,14 @@ def register_battery(
             "Manufacturing Date must use YYYY-MM, for example 2026-09."
         )
 
+    # Drop identification values that this level does not use
+    # (e.g. no serial number on an SKU registration).
+    level_fields = LEVEL_FIELDS[granularity]
+    if "batch_number" not in level_fields:
+        batch_number = ""
+    if "serial_number" not in level_fields:
+        serial_number = ""
+
     if granularity == "SKU" and not model_id:
         raise gr.Error("Model / SKU is required for SKU registrations.")
 
@@ -231,23 +311,49 @@ def register_battery(
         f"Weight (kg): {weight}",
         f"Capacity ({capacity_unit}): {capacity}",
         f"Registration level: {granularity}",
-        f"Model / SKU: {model_id}",
-        f"Batch number: {batch_number}",
-        f"Serial number: {serial_number}",
+        f"Model / SKU: {model_id or '—'}",
+        f"Batch number: {batch_number or '—'}",
+        f"Serial number: {serial_number or '—'}",
         f"Manufacturing country: {country}",
         f"Manufacturing date: {manufacture_date}",
         f"Lifecycle status: {status}",
         f"Registered: {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M')}"
     ))
 
-    return battery_id, details, make_qr(battery_id)
+    qr = make_qr(battery_id)
+    success = (
+        f"### ✅ Бүртгэл амжилттай · Registration successful\n"
+        f"Батарейн ID · Battery ID: **{battery_id}**  \n"
+        f"QR кодыг татаж аваад батарейд наана уу. · "
+        f"Download the QR code and attach it to the battery."
+    )
+
+    return (
+        battery_id,
+        details,
+        qr,
+        record_link(battery_id),
+        gr.update(value=success, visible=True),
+        gr.update(value=save_qr_file(battery_id, qr), visible=True),
+        gr.update(visible=True),
+    )
+
+
+def reset_registration_results():
+    """Hide the previous result so the next battery starts clean."""
+    return (
+        "", "", None, "",
+        gr.update(value="", visible=False),
+        gr.update(value=None, visible=False),
+        gr.update(visible=False),
+    )
 
 
 def find_battery(battery_id):
     battery_id = (battery_id or "").strip().upper()
 
     if not battery_id:
-        return "Please enter a Battery ID.", None
+        return "Please enter a Battery ID.", None, ""
 
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn.cursor() as cur:
@@ -259,7 +365,7 @@ def find_battery(battery_id):
             record = cur.fetchone()
 
     if record is None:
-        return "No battery record found for this ID.", None
+        return "No battery record found for this ID.", None, ""
 
     labels = (
         "Battery ID", "Category", "Chemistry", "Lifecycle status"
@@ -269,7 +375,7 @@ def find_battery(battery_id):
         for label, value in zip(labels, record)
     )
 
-    return details, make_qr(record[0])
+    return details, make_qr(record[0]), record_link(record[0])
 
 
 def admin_find_battery(battery_id, admin_key):
@@ -525,10 +631,29 @@ def load_battery_from_url(request: gr.Request):
     battery_id = battery_id.strip().upper()
 
     if not battery_id:
-        return "", "", None
+        return "", "", None, ""
 
-    details, qr = find_battery(battery_id)
-    return battery_id, details, qr
+    details, qr, link = find_battery(battery_id)
+    return battery_id, details, qr, link
+
+
+# Runs in the browser after a search: puts ?battery_id=... in the address
+# bar so the page link always matches the record on screen.
+SYNC_URL_JS = """
+(batteryId, link) => {
+    const url = new URL(window.location.href);
+    const id = (batteryId || "").trim().toUpperCase();
+    if (link && id) {
+        url.searchParams.set("battery_id", id);
+    } else {
+        url.searchParams.delete("battery_id");
+    }
+    window.history.replaceState(null, "", url);
+    return [];
+}
+"""
+
+SCROLL_TOP_JS = "() => { window.scrollTo({top: 0, behavior: 'smooth'}); return []; }"
 
 
 def clear_battery_fields():
@@ -586,77 +711,102 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     interactive=False,
                     height=220
                 )
+            lookup_link = gr.Textbox(
+                label="Бүртгэлийн холбоос · Record link",
+                info="Хуулах товчоор холбоосыг хуулж бусадтай хуваалцана. · "
+                     "Use the copy button to share this record.",
+                interactive=False,
+                buttons=["copy"]
+            )
 
-            lookup_button.click(
-                fn=find_battery,
-                inputs=lookup_id,
-                outputs=[lookup_result, lookup_qr]
-            )
-            lookup_id.submit(
-                fn=find_battery,
-                inputs=lookup_id,
-                outputs=[lookup_result, lookup_qr]
-            )
+            for trigger in (lookup_button.click, lookup_id.submit):
+                trigger(
+                    fn=find_battery,
+                    inputs=lookup_id,
+                    outputs=[lookup_result, lookup_qr, lookup_link]
+                ).then(
+                    fn=None,
+                    inputs=[lookup_id, lookup_link],
+                    js=SYNC_URL_JS
+                )
 
         # ---------- 2. Registration (needs registration key) ----------
         with gr.Tab("➕ Бүртгэх / Register", id="register"):
             gr.Markdown(
                 "Бүртгэл хийхэд бүртгэлийн түлхүүр шаардлагатай. · "
-                "A registration key is required."
+                "A registration key is required.  \n"
+                "**\\*** — заавал бөглөх талбар · required field"
             )
 
             gr.Markdown("#### Үндсэн мэдээлэл · Basic information")
             with gr.Row():
                 company = gr.Textbox(
-                    label="Компани / Импортлогч · Company / Importer",
+                    label="Компани / Импортлогч · Company / Importer" + REQUIRED,
                     placeholder="Компанийн нэр · Company name"
                 )
                 category = gr.Dropdown(
                     list(CATEGORIES),
-                    label="Ангилал · Category",
+                    value=None,
+                    label="Ангилал · Category" + REQUIRED,
                     info="SLI → машины асаагуурын батарей · car starter battery"
                 )
             with gr.Row():
                 chemistry = gr.Dropdown(
                     list(CHEMISTRIES),
-                    label="Химийн төрөл · Chemistry"
+                    value=None,
+                    label="Химийн төрөл · Chemistry" + REQUIRED
                 )
                 granularity = gr.Dropdown(
                     list(LEVELS),
-                    label="Бүртгэлийн түвшин · Registration level",
+                    value=None,
+                    label="Бүртгэлийн түвшин · Registration level" + REQUIRED,
                     info="SKU → загвар, Batch → багц, Unit → ширхэг"
                 )
             with gr.Row():
-                weight = gr.Number(label="Жин (кг) · Weight (kg)")
-                capacity = gr.Number(label="Багтаамж · Capacity")
+                weight = gr.Number(label="Жин (кг) · Weight (kg)" + REQUIRED)
+                capacity = gr.Number(label="Багтаамж · Capacity" + REQUIRED)
                 capacity_unit = gr.Dropdown(
                     list(CAPACITY_UNITS),
-                    label="Нэгж · Unit"
+                    value=None,
+                    label="Нэгж · Unit" + REQUIRED
                 )
 
             gr.Markdown("#### Таних мэдээлэл · Identification")
+            level_hint = gr.Markdown(LEVEL_HINTS[None])
             with gr.Row():
-                model_id = gr.Textbox(label="Загвар / SKU · Model / SKU")
-                batch_number = gr.Textbox(label="Багцын дугаар · Batch number")
-                serial_number = gr.Textbox(label="Серийн дугаар · Serial number")
+                model_id = gr.Textbox(
+                    label=ID_LABELS["model_id"], visible=False
+                )
+                batch_number = gr.Textbox(
+                    label=ID_LABELS["batch_number"], visible=False
+                )
+                serial_number = gr.Textbox(
+                    label=ID_LABELS["serial_number"], visible=False
+                )
+
+            granularity.change(
+                fn=id_field_updates,
+                inputs=granularity,
+                outputs=[model_id, batch_number, serial_number, level_hint]
+            )
 
             gr.Markdown("#### Үйлдвэрлэл · Manufacturing")
             with gr.Row():
                 country = gr.Textbox(
-                    label="Үйлдвэрлэсэн улс · Country of manufacture"
+                    label="Үйлдвэрлэсэн улс · Country of manufacture" + REQUIRED
                 )
                 manufacture_date = gr.Textbox(
-                    label="Үйлдвэрлэсэн огноо · Manufacturing date",
+                    label="Үйлдвэрлэсэн огноо · Manufacturing date" + REQUIRED,
                     placeholder="YYYY-MM (2026-09)"
                 )
 
             status = gr.Dropdown(
                 list(STATUSES),
                 value="original",
-                label="Амьдралын мөчлөгийн төлөв · Lifecycle status"
+                label="Амьдралын мөчлөгийн төлөв · Lifecycle status" + REQUIRED
             )
             registration_key = gr.Textbox(
-                label="Бүртгэлийн түлхүүр · Registration key",
+                label="Бүртгэлийн түлхүүр · Registration key" + REQUIRED,
                 type="password"
             )
             register_button = gr.Button(
@@ -664,9 +814,11 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 variant="primary"
             )
 
+            success_banner = gr.Markdown(visible=False)
             battery_id_output = gr.Textbox(
                 label="Шинэ батарейн ID · New Battery ID",
-                interactive=False
+                interactive=False,
+                buttons=["copy"]
             )
             with gr.Row():
                 record_output = gr.Textbox(
@@ -680,11 +832,31 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     interactive=False,
                     height=260
                 )
+            register_link = gr.Textbox(
+                label="Бүртгэлийн холбоос · Record link",
+                interactive=False,
+                buttons=["copy"]
+            )
+            with gr.Row():
+                qr_download = gr.DownloadButton(
+                    "⬇️ QR код татах · Download QR code",
+                    variant="primary",
+                    visible=False
+                )
+                register_another = gr.Button(
+                    "➕ Өөр батарей бүртгэх · Register another battery",
+                    variant="secondary",
+                    visible=False
+                )
 
             battery_fields = [
                 category, chemistry, weight, capacity, capacity_unit,
                 granularity, model_id, batch_number, serial_number,
                 country, manufacture_date, status
+            ]
+            result_outputs = [
+                battery_id_output, record_output, qr_output, register_link,
+                success_banner, qr_download, register_another
             ]
 
             register_button.click(
@@ -695,15 +867,26 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     serial_number, country, manufacture_date, status,
                     registration_key
                 ],
-                outputs=[battery_id_output, record_output, qr_output]
+                outputs=result_outputs
             ).success(
                 # Clear the battery fields after a successful registration so
-                # the next battery starts from an empty form. Company and the
-                # registration key stay filled for the next entry.
+                # the same battery is not registered twice by accident.
+                # Company and the registration key stay filled.
                 fn=clear_battery_fields,
                 inputs=[],
                 outputs=battery_fields
             )
+
+            # "Register another": hide the last result and go back to the top
+            register_another.click(
+                fn=reset_registration_results,
+                inputs=[],
+                outputs=result_outputs
+            ).then(
+                fn=clear_battery_fields,
+                inputs=[],
+                outputs=battery_fields
+            ).then(fn=None, js=SCROLL_TOP_JS)
 
             gr.Button(
                 "🧹 Маягт цэвэрлэх · Clear form",
@@ -821,7 +1004,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
     demo.load(
         fn=load_battery_from_url,
         inputs=[],
-        outputs=[lookup_id, lookup_result, lookup_qr]
+        outputs=[lookup_id, lookup_result, lookup_qr, lookup_link]
     )
 
 
