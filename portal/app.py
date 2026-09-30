@@ -1,4 +1,7 @@
+import base64
 import hmac
+import html
+import io
 import math
 import os
 import re
@@ -28,6 +31,25 @@ STATUSES = ("original", "repurposed", "re-used", "remanufactured", "waste")
 
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TIMEZONE", "Asia/Ulaanbaatar"))
 
+# Mongolian display names. The database keeps the English codes.
+CATEGORY_MN = {
+    "SLI": "Асаагуурын батарей (SLI)",
+    "EV": "Цахилгаан тээврийн хэрэгслийн (EV)",
+    "LMT": "Хөнгөн тээврийн (LMT)",
+    "Stationary": "Суурин хадгалалтын",
+    "Industrial": "Үйлдвэрийн",
+    "Consumer": "Зөөврийн / өргөн хэрэглээний",
+}
+CHEMISTRY_MN = {"Lead-acid": "Хар тугалга-хүчил", "Other": "Бусад"}
+STATUS_MN = {
+    "original": "Шинэ",
+    "repurposed": "Өөр зориулалтад шилжүүлсэн",
+    "re-used": "Дахин ашигласан",
+    "remanufactured": "Дахин үйлдвэрлэсэн",
+    "waste": "Хаягдал",
+}
+LEVEL_MN = {"SKU": "Загвараар", "Batch": "Багцаар", "Unit": "Ширхэгээр"}
+
 # Fields an admin may correct after registration: label -> column
 EDITABLE_FIELDS = {
     "Компани · Company": "company",
@@ -54,16 +76,24 @@ def local_time(value):
     return value.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
-def require_admin_key(key):
+def require_admin_key(key, kind="admin"):
     expected = os.getenv("REGISTRATION_KEY")
     if not expected or not hmac.compare_digest(key or "", expected):
-        raise gr.Error("Admin key is missing or incorrect.")
+        if kind == "registration":
+            raise gr.Error(
+                "Бүртгэлийн түлхүүр хоосон эсвэл буруу байна. · "
+                "Registration key is missing or incorrect."
+            )
+        raise gr.Error(
+            "Админ түлхүүр хоосон эсвэл буруу байна. · "
+            "Admin key is missing or incorrect."
+        )
 
 
 def required_text(value, label):
     value = (value or "").strip()
     if not value:
-        raise gr.Error(f"{label} is required.")
+        raise gr.Error(f"{label}: заавал бөглөнө. · {label} is required.")
     return value
 
 
@@ -74,7 +104,10 @@ def positive_number(value, label):
         or not math.isfinite(value)
         or value <= 0
     ):
-        raise gr.Error(f"{label} must be a positive number.")
+        raise gr.Error(
+            f"{label}: 0-ээс их тоо оруулна уу. · "
+            f"{label} must be a positive number."
+        )
     return value
 
 
@@ -84,7 +117,16 @@ def record_link(battery_id):
 
 
 def make_qr(battery_id):
-    return qrcode.make(record_link(battery_id)).convert("RGB")
+    return qrcode.make(record_link(battery_id), border=2).convert("RGB")
+
+
+def image_data_uri(image):
+    """Embed a PIL image in HTML as a PNG data URI."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(
+        buffer.getvalue()
+    ).decode("ascii")
 
 
 QR_DIR = os.path.join(tempfile.gettempdir(), "mcbi_qr")
@@ -98,8 +140,6 @@ def save_qr_file(battery_id, image):
     return path
 
 
-REQUIRED = " *"
-
 # Which identification fields each registration level uses:
 # field -> required?  Fields not listed are hidden and left empty.
 LEVEL_FIELDS = {
@@ -109,31 +149,32 @@ LEVEL_FIELDS = {
 }
 
 ID_LABELS = {
-    "model_id": "Загвар / SKU · Model / SKU",
-    "batch_number": "Багцын дугаар · Batch number",
-    "serial_number": "Серийн дугаар · Serial number",
+    "model_id": "Загвар / SKU",
+    "batch_number": "Багцын дугаар",
+    "serial_number": "Серийн дугаар",
+}
+ID_INFO = {
+    "model_id": "Model / SKU",
+    "batch_number": "Batch number",
+    "serial_number": "Serial number",
 }
 
 LEVEL_HINTS = {
     None: (
-        "ℹ️ Эхлээд **бүртгэлийн түвшнээ** сонгоно уу — бөглөх талбарууд "
-        "түүнээс хамаарна. · First choose a **registration level**; the "
-        "fields below depend on it."
+        "Эхлээд **бүртгэлийн түвшнээ** сонгоно уу. Доорх талбарууд "
+        "түүнээс хамаарна."
     ),
     "SKU": (
-        "ℹ️ **SKU** — нэг загварыг бүхэлд нь бүртгэнэ. Зөвхөн загварын "
-        "дугаар хэрэгтэй, **серийн дугаар хэрэггүй**. · Registers a whole "
-        "battery model. Only the model / SKU is needed — **no serial number**."
+        "**Загвараар** — нэг загварыг бүхэлд нь бүртгэнэ. Зөвхөн загварын "
+        "дугаар хэрэгтэй."
     ),
     "Batch": (
-        "ℹ️ **Batch** — нэг үйлдвэрлэлийн багцыг бүртгэнэ. **Багцын дугаар "
-        "заавал**, загвар нь сонголтоор. · Registers one production batch. "
-        "**Batch number is required**; model is optional."
+        "**Багцаар** — нэг үйлдвэрлэлийн багцыг бүртгэнэ. Багцын дугаар "
+        "заавал, загвар нь сонголтоор."
     ),
     "Unit": (
-        "ℹ️ **Unit** — нэг ширхэг батарейг бүртгэнэ. **Серийн дугаар "
-        "заавал**, загвар ба багц сонголтоор. · Registers a single battery. "
-        "**Serial number is required**; model and batch are optional."
+        "**Ширхэгээр** — нэг ширхэг батарейг бүртгэнэ. Серийн дугаар "
+        "заавал, загвар ба багц сонголтоор."
     ),
 }
 
@@ -146,12 +187,149 @@ def id_field_updates(level):
         if name in fields:
             updates.append(gr.update(
                 visible=True,
-                label=label + (REQUIRED if fields[name] else " (сонголтоор · optional)")
+                label=label + ("" if fields[name] else " (сонголтоор)")
             ))
         else:
             updates.append(gr.update(visible=False, value=""))
     updates.append(LEVEL_HINTS.get(level, LEVEL_HINTS[None]))
     return updates
+
+
+# ---------- HTML building blocks (all user text is escaped) ----------
+
+def esc(value):
+    if value is None or value == "":
+        return "—"
+    return html.escape(str(value))
+
+
+def fmt_number(value):
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def lifecycle_html(status):
+    stage = {
+        "original": 0, "re-used": 1, "repurposed": 1,
+        "remanufactured": 1, "waste": 2,
+    }.get(status, 0)
+    steps = (
+        "Шинэ · ашиглалтад",
+        "Дахин ашиглалт / хоёр дахь амьдрал",
+        "Цуглуулалт ба дахин боловсруулалт",
+    )
+    items = []
+    for index, text in enumerate(steps):
+        state = (
+            "done" if index < stage
+            else "current" if index == stage
+            else "todo"
+        )
+        items.append(f'<li class="mcbi-step-{state}"><span></span>{text}</li>')
+    return '<ol class="mcbi-life">' + "".join(items) + "</ol>"
+
+
+WASTE_NOTE = """
+<div class="mcbi-note">
+  <svg width="26" height="30" viewBox="0 0 30 34" aria-hidden="true">
+    <path d="M8 9h14l-1.5 19h-11z" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linejoin="round"/>
+    <path d="M6 9h18M12 9V6h6v3" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round"/>
+    <path d="M3 4l24 27M27 4L3 31" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round"/>
+  </svg>
+  <div><strong>Энгийн хогтой хамт хаяж болохгүй</strong>
+  Ашиглалтаас гарсан батарейг цуглуулах цэгт хүлээлгэн өгнө.
+  · Do not dispose of with household waste.</div>
+</div>
+"""
+
+
+def public_card(record):
+    battery_id, category, chemistry, status, registered_at = record
+    qr = image_data_uri(make_qr(battery_id))
+    registered = local_time(registered_at)
+    return f"""
+<div class="mcbi-passport">
+  <div class="mcbi-passport-dark">
+    <span class="mcbi-eyebrow">БАТАРЕЙН ПАСПОРТ · BATTERY PASSPORT</span>
+    <span class="mcbi-big">{esc(CHEMISTRY_MN.get(chemistry, chemistry))} батарей</span>
+    <span class="mcbi-muted-light">{esc(CATEGORY_MN.get(category, category))}</span>
+    <span class="mcbi-id">{esc(battery_id)}</span>
+    <img class="mcbi-qr" src="{qr}" alt="QR код · QR code">
+  </div>
+  <div class="mcbi-passport-body">
+    <div class="mcbi-row">
+      <span class="mcbi-label">Амьдралын мөчлөг · Lifecycle</span>
+      <span class="mcbi-chip">{esc(STATUS_MN.get(status, status))}</span>
+    </div>
+    {lifecycle_html(status)}
+    <span class="mcbi-small">Бүртгэсэн · Registered: {esc(registered)}</span>
+    {WASTE_NOTE}
+    <p class="mcbi-small">Нийтэд зөвхөн ангилал, химийн төрөл, төлөв
+    харагдана. · Only category, chemistry and status are public.</p>
+  </div>
+</div>
+"""
+
+
+def private_card(values, qr_image):
+    qr = image_data_uri(qr_image)
+    rows = (
+        ("Компани · Company", values["company"]),
+        ("Серийн дугаар · Serial", values["serial_number"]),
+        ("Загвар · Model", values["model_id"]),
+        ("Багц · Batch", values["batch_number"]),
+        ("Жин · Weight", f"{fmt_number(values['weight'])} кг"),
+        ("Үйлдвэрлэсэн · Made",
+         f"{values['country']} · {values['manufacture_date']}"),
+        ("Түвшин · Level", LEVEL_MN.get(values["granularity"])),
+        ("Бүртгэсэн · Registered", values["registered"]),
+    )
+    cells = "".join(
+        f'<div><dt>{label}</dt><dd>{esc(value)}</dd></div>'
+        for label, value in rows
+    )
+    return f"""
+<div class="mcbi-success">
+  <span class="mcbi-tick" aria-hidden="true">✓</span>
+  <div><strong>Батарей амжилттай бүртгэгдлээ · Registration successful</strong>
+  QR кодыг хэвлээд батарейн их бие дээр наана уу.
+  · Print the QR code and attach it to the battery.</div>
+</div>
+<div class="mcbi-passport">
+  <div class="mcbi-passport-dark">
+    <img class="mcbi-qr" src="{qr}" alt="QR код · QR code">
+    <span class="mcbi-eyebrow">БАТАРЕЙН ID</span>
+    <span class="mcbi-id">{esc(values['battery_id'])}</span>
+  </div>
+  <div class="mcbi-passport-body">
+    <div class="mcbi-row">
+      <span class="mcbi-eyebrow-dark">БАТАРЕЙН ПАСПОРТ · BATTERY PASSPORT</span>
+      <span class="mcbi-chip">{esc(STATUS_MN.get(values['status']))}</span>
+    </div>
+    <span class="mcbi-big-dark">{esc(values['chemistry'])} ·
+      {esc(fmt_number(values['capacity']))} {esc(values['capacity_unit'])}</span>
+    <span class="mcbi-muted">{esc(CATEGORY_MN.get(values['category']))}</span>
+    <dl class="mcbi-grid">{cells}</dl>
+    <p class="mcbi-small">Компани, жин, серийн дугаар нууц. QR уншуулсан хүн
+    зөвхөн ангилал, химийн төрөл, төлөвийг харна. · Company, weight and
+    serial number stay private.</p>
+  </div>
+</div>
+"""
+
+
+def message_card(text):
+    return f'<div class="mcbi-empty">{text}</div>'
+
+
+LOOKUP_EMPTY = message_card(
+    "Батарейн ID-г оруулах эсвэл батарей дээрх QR кодыг утсаараа уншуулна уу."
+    "<br><span>Enter a Battery ID or scan the QR code on the battery.</span>"
+)
 
 
 def init_database():
@@ -217,39 +395,42 @@ def register_battery(
     status,
     registration_key
 ):
-    require_admin_key(registration_key)
+    require_admin_key(registration_key, "registration")
 
-    company = required_text(company, "Company / Importer")
-    country = required_text(country, "Country of Manufacture")
-    manufacture_date = required_text(
-        manufacture_date, "Manufacturing Date"
-    )
-    model_id = (model_id or "").strip()
-    batch_number = (batch_number or "").strip()
-    serial_number = (serial_number or "").strip()
-
+    company = required_text(company, "Компани · Company")
     if (
         category not in CATEGORIES
         or chemistry not in CHEMISTRIES
         or granularity not in LEVELS
     ):
         raise gr.Error(
-            "Select a valid category, chemistry and registration level."
+            "Ангилал, химийн төрөл, бүртгэлийн түвшнээ сонгоно уу. · "
+            "Select a category, chemistry and registration level."
         )
 
     if status not in STATUSES or capacity_unit not in CAPACITY_UNITS:
         raise gr.Error(
-            "Select a valid lifecycle status and capacity unit."
+            "Төлөв болон багтаамжийн нэгжээ сонгоно уу. · "
+            "Select a lifecycle status and capacity unit."
         )
 
-    weight = positive_number(weight, "Weight")
-    capacity = positive_number(capacity, "Capacity")
+    weight = positive_number(weight, "Жин · Weight")
+    capacity = positive_number(capacity, "Багтаамж · Capacity")
+
+    country = required_text(country, "Үйлдвэрлэсэн улс · Country")
+    manufacture_date = required_text(
+        manufacture_date, "Үйлдвэрлэсэн огноо · Manufacturing date"
+    )
+    model_id = (model_id or "").strip()
+    batch_number = (batch_number or "").strip()
+    serial_number = (serial_number or "").strip()
 
     if not re.fullmatch(
         r"\d{4}-(0[1-9]|1[0-2])", manufacture_date
     ):
         raise gr.Error(
-            "Manufacturing Date must use YYYY-MM, for example 2026-09."
+            "Огноог ОООО-СС хэлбэрээр бичнэ үү, жишээ нь 2026-09. · "
+            "Manufacturing date must use YYYY-MM, for example 2026-09."
         )
 
     # Drop identification values that this level does not use
@@ -261,16 +442,21 @@ def register_battery(
         serial_number = ""
 
     if granularity == "SKU" and not model_id:
-        raise gr.Error("Model / SKU is required for SKU registrations.")
+        raise gr.Error(
+            "Загвараар бүртгэхэд загварын дугаар заавал. · "
+            "Model / SKU is required for SKU registrations."
+        )
 
     if granularity == "Batch" and not batch_number:
         raise gr.Error(
-            "Batch Number is required for Batch registrations."
+            "Багцаар бүртгэхэд багцын дугаар заавал. · "
+            "Batch number is required for Batch registrations."
         )
 
     if granularity == "Unit" and not serial_number:
         raise gr.Error(
-            "Serial Number is required for Unit registrations."
+            "Ширхэгээр бүртгэхэд серийн дугаар заавал. · "
+            "Serial number is required for Unit registrations."
         )
 
     battery_id = "MCBI-" + uuid.uuid4().hex[:16].upper()
@@ -303,79 +489,67 @@ def register_battery(
                     VALUES (%s, 'registered', %s)
                 """, (battery_id, status))
 
-    details = "\n".join((
-        f"Battery ID: {battery_id}",
-        f"Company / Importer: {company}",
-        f"Category: {category}",
-        f"Chemistry: {chemistry}",
-        f"Weight (kg): {weight}",
-        f"Capacity ({capacity_unit}): {capacity}",
-        f"Registration level: {granularity}",
-        f"Model / SKU: {model_id or '—'}",
-        f"Batch number: {batch_number or '—'}",
-        f"Serial number: {serial_number or '—'}",
-        f"Manufacturing country: {country}",
-        f"Manufacturing date: {manufacture_date}",
-        f"Lifecycle status: {status}",
-        f"Registered: {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M')}"
-    ))
-
     qr = make_qr(battery_id)
-    success = (
-        f"### ✅ Бүртгэл амжилттай · Registration successful\n"
-        f"Батарейн ID · Battery ID: **{battery_id}**  \n"
-        f"QR кодыг татаж аваад батарейд наана уу. · "
-        f"Download the QR code and attach it to the battery."
-    )
+    card = private_card({
+        "battery_id": battery_id,
+        "company": company,
+        "category": category,
+        "chemistry": chemistry,
+        "weight": weight,
+        "capacity": capacity,
+        "capacity_unit": capacity_unit,
+        "granularity": granularity,
+        "model_id": model_id,
+        "batch_number": batch_number,
+        "serial_number": serial_number,
+        "country": country,
+        "manufacture_date": manufacture_date,
+        "status": status,
+        "registered": datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M"),
+    }, qr)
 
     return (
-        battery_id,
-        details,
-        qr,
-        record_link(battery_id),
-        gr.update(value=success, visible=True),
-        gr.update(value=save_qr_file(battery_id, qr), visible=True),
         gr.update(visible=True),
+        card,
+        battery_id,
+        record_link(battery_id),
+        gr.update(value=save_qr_file(battery_id, qr)),
     )
 
 
 def reset_registration_results():
     """Hide the previous result so the next battery starts clean."""
-    return (
-        "", "", None, "",
-        gr.update(value="", visible=False),
-        gr.update(value=None, visible=False),
-        gr.update(visible=False),
-    )
+    return gr.update(visible=False), "", "", "", gr.update(value=None)
 
 
 def find_battery(battery_id):
     battery_id = (battery_id or "").strip().upper()
 
     if not battery_id:
-        return "Please enter a Battery ID.", None, ""
+        return LOOKUP_EMPTY, gr.update(value="", visible=False)
 
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, category, chemistry, status
+                SELECT id, category, chemistry, status,
+                       registered_at::timestamptz
                 FROM batteries
                 WHERE id = %s
             """, (battery_id,))
             record = cur.fetchone()
 
     if record is None:
-        return "No battery record found for this ID.", None, ""
+        return (
+            message_card(
+                "Энэ ID-тай батарей олдсонгүй. ID-г дахин шалгана уу."
+                "<br><span>No battery record found for this ID.</span>"
+            ),
+            gr.update(value="", visible=False),
+        )
 
-    labels = (
-        "Battery ID", "Category", "Chemistry", "Lifecycle status"
+    return public_card(record), gr.update(
+        value=record_link(record[0]), visible=True
     )
-    details = "\n".join(
-        f"{label}: {value if value is not None else '—'}"
-        for label, value in zip(labels, record)
-    )
-
-    return details, make_qr(record[0]), record_link(record[0])
 
 
 def admin_find_battery(battery_id, admin_key):
@@ -383,7 +557,7 @@ def admin_find_battery(battery_id, admin_key):
     battery_id = (battery_id or "").strip().upper()
 
     if not battery_id:
-        return "Enter a Battery ID."
+        return "Батарейн ID оруулна уу. · Enter a Battery ID."
 
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn.cursor() as cur:
@@ -400,7 +574,7 @@ def admin_find_battery(battery_id, admin_key):
             record = cur.fetchone()
 
     if record is None:
-        return "No battery record found for this ID."
+        return "Батарей олдсонгүй. · No battery record found for this ID."
 
     labels = (
         "Battery ID",
@@ -447,11 +621,11 @@ def admin_list_batteries(admin_key):
             records = cur.fetchall()
 
     if not records:
-        return "No batteries registered yet."
+        return "Бүртгэл алга байна. · No batteries registered yet."
 
     rows = [
-        f"Total registered: {total}. "
-        f"Showing the newest {len(records)}:"
+        f"Нийт · Total registered: {total}. "
+        f"Сүүлийн · Showing the newest {len(records)}:"
     ]
 
     rows.extend(
@@ -471,10 +645,11 @@ def change_status(battery_id, new_status, reason, admin_key):
 
     if not battery_id or new_status not in STATUSES:
         raise gr.Error(
+            "Батарейн ID болон шинэ төлөвөө сонгоно уу. · "
             "Enter a Battery ID and a valid lifecycle status."
         )
 
-    reason = required_text(reason, "Reason for status change")
+    reason = required_text(reason, "Шалтгаан · Reason")
 
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn:
@@ -489,6 +664,7 @@ def change_status(battery_id, new_status, reason, admin_key):
 
                 if row is None:
                     raise gr.Error(
+                        "Батарей олдсонгүй. · "
                         "No battery record found for this ID."
                     )
 
@@ -496,8 +672,8 @@ def change_status(battery_id, new_status, reason, admin_key):
 
                 if old_status == new_status:
                     return (
-                        "Status is already set to this value. "
-                        "No change was made."
+                        "Төлөв аль хэдийн ийм байна, өөрчлөлт хийгдээгүй. · "
+                        "Status is already set to this value."
                     )
 
                 cur.execute("""
@@ -518,7 +694,7 @@ def change_status(battery_id, new_status, reason, admin_key):
                     battery_id, old_status, new_status, reason
                 ))
 
-    return f"Status updated: {old_status} → {new_status}."
+    return f"Төлөв шинэчлэгдлээ · Status updated: {old_status} → {new_status}."
 
 
 def admin_history(battery_id, admin_key):
@@ -526,7 +702,7 @@ def admin_history(battery_id, admin_key):
     battery_id = (battery_id or "").strip().upper()
 
     if not battery_id:
-        return "Enter a Battery ID."
+        return "Батарейн ID оруулна уу. · Enter a Battery ID."
 
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn.cursor() as cur:
@@ -541,7 +717,7 @@ def admin_history(battery_id, admin_key):
             events = cur.fetchall()
 
     if not events:
-        return "No recorded events for this Battery ID."
+        return "Түүх алга. · No recorded events for this Battery ID."
 
     return "\n".join(
         f"{local_time(occurred_at)}: {event_type} "
@@ -557,35 +733,36 @@ def edit_battery(battery_id, field_label, new_value, reason, admin_key):
     battery_id = (battery_id or "").strip().upper()
 
     if not battery_id:
-        raise gr.Error("Enter a Battery ID.")
+        raise gr.Error("Батарейн ID оруулна уу. · Enter a Battery ID.")
     if field_label not in EDITABLE_FIELDS:
-        raise gr.Error("Select the field to correct.")
+        raise gr.Error("Засах талбараа сонгоно уу. · Select the field to correct.")
 
     column = EDITABLE_FIELDS[field_label]
-    reason = required_text(reason, "Reason")
+    reason = required_text(reason, "Шалтгаан · Reason")
     new_value = (new_value or "").strip()
 
     if column in ("company", "country"):
         new_value = required_text(new_value, field_label)
     elif column == "category" and new_value not in CATEGORIES:
-        raise gr.Error("Category must be one of: " + ", ".join(CATEGORIES))
+        raise gr.Error("Ангилал · Category: " + ", ".join(CATEGORIES))
     elif column == "chemistry" and new_value not in CHEMISTRIES:
-        raise gr.Error("Chemistry must be one of: " + ", ".join(CHEMISTRIES))
+        raise gr.Error("Химийн төрөл · Chemistry: " + ", ".join(CHEMISTRIES))
     elif column == "granularity" and new_value not in LEVELS:
-        raise gr.Error("Registration level must be one of: " + ", ".join(LEVELS))
+        raise gr.Error("Бүртгэлийн түвшин · Level: " + ", ".join(LEVELS))
     elif column == "capacity_unit" and new_value not in CAPACITY_UNITS:
-        raise gr.Error("Capacity unit must be one of: " + ", ".join(CAPACITY_UNITS))
+        raise gr.Error("Нэгж · Capacity unit: " + ", ".join(CAPACITY_UNITS))
     elif column in ("weight", "capacity"):
         try:
             number = float(new_value.replace(",", "."))
         except ValueError:
-            raise gr.Error(f"{field_label} must be a number.")
+            raise gr.Error(f"{field_label}: тоо оруулна уу. · must be a number.")
         new_value = positive_number(number, field_label)
     elif column == "manufacture_date" and not re.fullmatch(
         r"\d{4}-(0[1-9]|1[0-2])", new_value
     ):
         raise gr.Error(
-            "Manufacturing Date must use YYYY-MM, for example 2026-09."
+            "Огноог ОООО-СС хэлбэрээр бичнэ үү, жишээ нь 2026-09. · "
+            "Manufacturing date must use YYYY-MM, for example 2026-09."
         )
 
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
@@ -598,11 +775,16 @@ def edit_battery(battery_id, field_label, new_value, reason, admin_key):
                 )
                 row = cur.fetchone()
                 if row is None:
-                    raise gr.Error("No battery record found for this ID.")
+                    raise gr.Error(
+                        "Батарей олдсонгүй. · No battery record found for this ID."
+                    )
                 old_value = row[0]
 
                 if str(old_value) == str(new_value):
-                    return "No change: the new value is the same as the current one."
+                    return (
+                        "Өөрчлөлт алга: шинэ утга одоогийнхтой ижил. · "
+                        "No change: the new value is the same."
+                    )
 
                 cur.execute(
                     f"UPDATE batteries SET {column} = %s WHERE id = %s",
@@ -620,7 +802,7 @@ def edit_battery(battery_id, field_label, new_value, reason, admin_key):
                     reason
                 ))
 
-    return f"Updated {column}: {old_value} → {new_value}."
+    return f"Засагдлаа · Updated {column}: {old_value} → {new_value}."
 
 
 def load_battery_from_url(request: gr.Request):
@@ -631,10 +813,10 @@ def load_battery_from_url(request: gr.Request):
     battery_id = battery_id.strip().upper()
 
     if not battery_id:
-        return "", "", None, ""
+        return "", LOOKUP_EMPTY, gr.update(value="", visible=False)
 
-    details, qr, link = find_battery(battery_id)
-    return battery_id, details, qr, link
+    card, link = find_battery(battery_id)
+    return battery_id, card, link
 
 
 # Runs in the browser after a search: puts ?battery_id=... in the address
@@ -658,7 +840,7 @@ SCROLL_TOP_JS = "() => { window.scrollTo({top: 0, behavior: 'smooth'}); return [
 
 def clear_battery_fields():
     return (
-        None, None, None, None, None,
+        None, None, None, None, "Wh",
         None, "", "", "",
         "", "", "original"
     )
@@ -667,63 +849,181 @@ def clear_battery_fields():
 init_database()
 
 
+# ---------- Look and feel ----------
+
+NAVY = gr.themes.Color(
+    c50="#EEF1F8", c100="#E6EAF4", c200="#C4CDE3", c300="#9AA8CC",
+    c400="#6F82B2", c500="#2A4079", c600="#0D2253", c700="#0B1D47",
+    c800="#0A1A40", c900="#081535", c950="#050D22",
+)
+
+THEME = gr.themes.Base(
+    primary_hue=NAVY,
+    neutral_hue=gr.themes.colors.stone,
+    radius_size=gr.themes.sizes.radius_md,
+    font=[gr.themes.GoogleFont("IBM Plex Sans"), "system-ui", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("IBM Plex Mono"), "monospace"],
+).set(
+    body_background_fill="#F4F2EC",
+    body_text_color="#15201F",
+    block_background_fill="#FFFFFF",
+    block_border_color="#E2DED4",
+    block_title_text_color="#15201F",
+    block_title_text_weight="600",
+    block_title_background_fill="none",
+    block_label_background_fill="none",
+    block_label_text_color="#55615F",
+    input_border_color="#D6D1C4",
+    input_border_color_focus="#0D2253",
+    button_primary_background_fill="#0D2253",
+    button_primary_background_fill_hover="#0A1A40",
+    button_primary_text_color="#FFFFFF",
+    button_secondary_background_fill="#FFFFFF",
+    button_secondary_border_color="#D6D1C4",
+    button_secondary_text_color="#15201F",
+    button_large_radius="10px",
+)
+
+LOGO_URI = "data:image/png;base64,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"
+
+HEADER_HTML = f"""
+<header class="mcbi-header">
+  <img src="{LOGO_URI}" alt="MCBI лого" width="52" height="52">
+  <div class="mcbi-brand">
+    <span class="mcbi-title">MCBI EPR</span>
+    <span class="mcbi-sub">Монголын тойрог батарейн санаачилга ·
+      Battery registration portal</span>
+  </div>
+  <span class="mcbi-badge">ТУРШИЛТ · PILOT · N-064</span>
+</header>
+"""
+
 CSS = """
-.gradio-container { max-width: 880px !important; margin: 0 auto !important; }
-#mcbi-header h1 { margin-bottom: 0.2em; }
-#mcbi-footer { opacity: 0.75; font-size: 0.9em; }
+.gradio-container { max-width: 1040px !important; width: 100% !important;
+  margin: 0 auto !important; box-sizing: border-box; }
+@media (max-width: 640px) {
+  .gradio-container .main { width: 100% !important; box-sizing: border-box;
+    padding-left: 12px !important; padding-right: 12px !important; }
+  .mcbi-card { padding: 14px !important; }
+}
+.mcbi-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 0 4px; }
+.mcbi-brand { display: flex; flex-direction: column; flex: 1; min-width: 180px; }
+.mcbi-title { font-size: 22px; font-weight: 700; letter-spacing: .02em;
+  color: #0D2253; }
+.mcbi-sub { font-size: 13px; color: #55615F; }
+.mcbi-badge { font-size: 12px; font-weight: 600; letter-spacing: .08em;
+  color: #8A5300; background: #FBF0DC; padding: 6px 10px; border-radius: 999px; }
+.mcbi-intro h2 { margin: 8px 0 4px; font-size: 26px; color: #15201F; }
+.mcbi-intro p { margin: 0 0 4px; color: #55615F; }
+.mcbi-card { background: #FFFFFF; border: 1px solid #E2DED4 !important;
+  border-radius: 14px !important; padding: 22px !important; }
+.mcbi-card-active { border: 2px solid #0D2253 !important; }
+.mcbi-step-title { display: flex; align-items: center; gap: 10px; margin: 0;
+  font-size: 17px; font-weight: 600; color: #15201F; }
+.mcbi-step-title span { width: 28px; height: 28px; border-radius: 50%;
+  background: #0D2253; color: #FFFFFF; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 14px; }
+.mcbi-success { display: flex; gap: 14px; align-items: center;
+  background: #E6EAF4; border: 1px solid #C4CDE3; border-radius: 14px;
+  padding: 16px 20px; margin-bottom: 14px; color: #22325C; }
+.mcbi-success strong { display: block; font-size: 17px; color: #0A1A40; }
+.mcbi-tick { width: 40px; height: 40px; flex-shrink: 0; border-radius: 50%;
+  background: #0D2253; color: #FFFFFF; display: flex; align-items: center;
+  justify-content: center; font-size: 20px; font-weight: 700; }
+.mcbi-passport { display: flex; flex-wrap: wrap; background: #FFFFFF;
+  border: 1px solid #E2DED4; border-radius: 16px; overflow: hidden; }
+.mcbi-passport-dark { background: #0D2253; color: #F4F2EC; padding: 24px;
+  display: flex; flex-direction: column; gap: 8px; flex: 1 1 260px;
+  align-items: flex-start; }
+.mcbi-passport-body { padding: 24px; display: flex; flex-direction: column;
+  gap: 12px; flex: 2 1 320px; }
+.mcbi-qr { width: 190px; height: 190px; background: #FFFFFF; padding: 8px;
+  border-radius: 10px; image-rendering: pixelated; }
+.mcbi-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .12em;
+  color: #E9B45C; }
+.mcbi-eyebrow-dark { font-size: 11px; font-weight: 600; letter-spacing: .12em;
+  color: #8A5300; }
+.mcbi-big { font-size: 24px; font-weight: 700; line-height: 1.2;
+  color: #FFFFFF !important; }
+.mcbi-note svg { flex-shrink: 0; width: 26px; height: 30px; }
+button.secondary { border: 1px solid #D6D1C4 !important;
+  background: #FFFFFF !important; }
+button.secondary:hover { background: #F4F2EC !important; }
+.mcbi-big-dark { font-size: 24px; font-weight: 700; color: #15201F; }
+.mcbi-muted-light { font-size: 14px; color: #C3CBDD; }
+.mcbi-muted { font-size: 14px; color: #55615F; }
+.mcbi-id { font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+  background: #1B3068; color: #FFFFFF; border-radius: 8px; padding: 8px 10px;
+  word-break: break-all; }
+.mcbi-row { display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; flex-wrap: wrap; }
+.mcbi-label { font-size: 15px; font-weight: 600; }
+.mcbi-chip { font-size: 13px; font-weight: 600; color: #0D2253;
+  background: #E6EAF4; padding: 5px 12px; border-radius: 999px; }
+.mcbi-grid { margin: 0; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 20px;
+  border-top: 1px solid #E2DED4; padding-top: 16px; }
+.mcbi-grid dt { font-size: 12px; color: #55615F; }
+.mcbi-grid dd { margin: 2px 0 0; font-size: 14px; font-weight: 500;
+  word-break: break-word; }
+.mcbi-small { margin: 0; font-size: 12px; line-height: 1.5; color: #55615F; }
+.mcbi-life { list-style: none; margin: 0; padding: 0; display: flex;
+  flex-direction: column; gap: 10px; }
+.mcbi-life li { display: flex; align-items: center; gap: 10px; font-size: 14px;
+  color: #55615F; }
+.mcbi-life li span { width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #C9C3B5; box-sizing: border-box; flex-shrink: 0; }
+.mcbi-life .mcbi-step-current { color: #15201F; font-weight: 600; }
+.mcbi-life .mcbi-step-current span { background: #0D2253; border: 3px solid #C4CDE3; }
+.mcbi-life .mcbi-step-done span { background: #9AA8CC; border-color: #9AA8CC; }
+.mcbi-note { display: flex; gap: 12px; align-items: flex-start;
+  background: #FBF0DC; border: 1px solid #EFD5A6; border-radius: 12px;
+  padding: 12px 14px; color: #5E3900; font-size: 13px; line-height: 1.45; }
+.mcbi-note strong { display: block; font-size: 14px; }
+.mcbi-empty { background: #FFFFFF; border: 1.5px dashed #C9C3B5;
+  border-radius: 14px; padding: 28px; text-align: center; color: #15201F; }
+.mcbi-empty span { color: #55615F; font-size: 14px; }
+#mcbi-footer { opacity: 0.8; font-size: 0.9em; }
 """
 
 
 with gr.Blocks(title="MCBI EPR Portal") as demo:
-    gr.Markdown(
-        """
-        # 🔋 MCBI EPR Portal
-        **Монголын тойрог батарейн санаачилга · Mongolia Circular Battery Initiative**
-
-        Батарей бүртгэх, таних, амьдралын мөчлөгийг хянах туршилтын систем ·
-        Battery registration, identification and lifecycle tracking (pilot)
-        """,
-        elem_id="mcbi-header"
-    )
+    gr.HTML(HEADER_HTML)
 
     with gr.Tabs():
 
         # ---------- 1. Public lookup (default tab; QR links open here) ----------
-        with gr.Tab("🔍 Хайх / Find", id="find"):
-            gr.Markdown(
-                "Батарейн ID-г оруулах эсвэл QR кодыг уншуулж нийтийн "
-                "мэдээллийг харна. · Enter a Battery ID or scan its QR code."
+        with gr.Tab("Хайх · Find", id="find"):
+            gr.HTML(
+                '<div class="mcbi-intro"><h2>Батарей хайх</h2>'
+                '<p>Батарейн ID-г оруулах эсвэл QR кодыг уншуулна уу. · '
+                'Enter a Battery ID or scan its QR code.</p></div>'
             )
-            lookup_id = gr.Textbox(
-                label="Батарейн ID · Battery ID",
-                placeholder="MCBI-8B675499..."
-            )
-            lookup_button = gr.Button("Хайх · Find", variant="primary")
-            with gr.Row():
-                lookup_result = gr.Textbox(
-                    label="Нийтийн мэдээлэл · Public record",
-                    lines=5,
-                    interactive=False
+            with gr.Row(equal_height=True):
+                lookup_id = gr.Textbox(
+                    label="Батарейн ID",
+                    info="Battery ID",
+                    placeholder="MCBI-8B675499...",
+                    scale=4
                 )
-                lookup_qr = gr.Image(
-                    label="QR код · QR code",
-                    type="pil",
-                    interactive=False,
-                    height=220
+                lookup_button = gr.Button(
+                    "Хайх · Find", variant="primary", scale=1, size="lg"
                 )
+            lookup_card = gr.HTML(LOOKUP_EMPTY)
             lookup_link = gr.Textbox(
-                label="Бүртгэлийн холбоос · Record link",
-                info="Хуулах товчоор холбоосыг хуулж бусадтай хуваалцана. · "
-                     "Use the copy button to share this record.",
+                label="Нийтийн холбоос",
+                info="Public link — хуулах товчоор хуваалцана · copy to share",
                 interactive=False,
-                buttons=["copy"]
+                buttons=["copy"],
+                visible=False
             )
 
             for trigger in (lookup_button.click, lookup_id.submit):
                 trigger(
                     fn=find_battery,
                     inputs=lookup_id,
-                    outputs=[lookup_result, lookup_qr, lookup_link]
+                    outputs=[lookup_card, lookup_link]
                 ).then(
                     fn=None,
                     inputs=[lookup_id, lookup_link],
@@ -731,123 +1031,142 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 )
 
         # ---------- 2. Registration (needs registration key) ----------
-        with gr.Tab("➕ Бүртгэх / Register", id="register"):
-            gr.Markdown(
-                "Бүртгэл хийхэд бүртгэлийн түлхүүр шаардлагатай. · "
-                "A registration key is required.  \n"
-                "**\\*** — заавал бөглөх талбар · required field"
+        with gr.Tab("Бүртгэх · Register", id="register"):
+            gr.HTML(
+                '<div class="mcbi-intro"><h2>Батарей бүртгэх</h2>'
+                '<p>Бүртгэл бүр өвөрмөц ID, QR код, нийтийн холбоос авна. '
+                '«Сонголтоор» гэснээс бусад бүх талбар заавал. · '
+                'All fields are required unless marked optional.</p></div>'
             )
 
-            gr.Markdown("#### Үндсэн мэдээлэл · Basic information")
-            with gr.Row():
-                company = gr.Textbox(
-                    label="Компани / Импортлогч · Company / Importer" + REQUIRED,
-                    placeholder="Компанийн нэр · Company name"
-                )
-                category = gr.Dropdown(
-                    list(CATEGORIES),
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.HTML('<h3 class="mcbi-step-title"><span>1</span>'
+                        'Үндсэн мэдээлэл · Basic information</h3>')
+                with gr.Row():
+                    company = gr.Textbox(
+                        label="Компани / Импортлогч",
+                        info="Company / Importer",
+                        placeholder="Компанийн нэр"
+                    )
+                    category = gr.Dropdown(
+                        [(f"{CATEGORY_MN[c]}", c) for c in CATEGORIES],
+                        value=None,
+                        label="Ангилал",
+                        info="Category"
+                    )
+                with gr.Row():
+                    chemistry = gr.Dropdown(
+                        [(CHEMISTRY_MN.get(c, c), c) for c in CHEMISTRIES],
+                        value=None,
+                        label="Химийн төрөл",
+                        info="Chemistry"
+                    )
+                    weight = gr.Number(
+                        value=None, label="Жин, кг", info="Weight, kg",
+                        minimum=0
+                    )
+                    capacity = gr.Number(
+                        value=None, label="Багтаамж", info="Capacity",
+                        minimum=0
+                    )
+                    capacity_unit = gr.Radio(
+                        list(CAPACITY_UNITS), value="Wh",
+                        label="Нэгж", info="Unit"
+                    )
+
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.HTML('<h3 class="mcbi-step-title"><span>2</span>'
+                        'Таних мэдээлэл · Identification</h3>')
+                granularity = gr.Radio(
+                    [
+                        ("Загвараар · SKU", "SKU"),
+                        ("Багцаар · Batch", "Batch"),
+                        ("Ширхэгээр · Unit", "Unit"),
+                    ],
                     value=None,
-                    label="Ангилал · Category" + REQUIRED,
-                    info="SLI → машины асаагуурын батарей · car starter battery"
+                    label="Бүртгэлийн түвшин",
+                    info="Registration level"
                 )
-            with gr.Row():
-                chemistry = gr.Dropdown(
-                    list(CHEMISTRIES),
-                    value=None,
-                    label="Химийн төрөл · Chemistry" + REQUIRED
-                )
-                granularity = gr.Dropdown(
-                    list(LEVELS),
-                    value=None,
-                    label="Бүртгэлийн түвшин · Registration level" + REQUIRED,
-                    info="SKU → загвар, Batch → багц, Unit → ширхэг"
-                )
-            with gr.Row():
-                weight = gr.Number(label="Жин (кг) · Weight (kg)" + REQUIRED)
-                capacity = gr.Number(label="Багтаамж · Capacity" + REQUIRED)
-                capacity_unit = gr.Dropdown(
-                    list(CAPACITY_UNITS),
-                    value=None,
-                    label="Нэгж · Unit" + REQUIRED
+                level_hint = gr.Markdown(LEVEL_HINTS[None])
+                with gr.Row():
+                    model_id = gr.Textbox(
+                        label=ID_LABELS["model_id"], info=ID_INFO["model_id"],
+                        visible=False
+                    )
+                    batch_number = gr.Textbox(
+                        label=ID_LABELS["batch_number"],
+                        info=ID_INFO["batch_number"], visible=False
+                    )
+                    serial_number = gr.Textbox(
+                        label=ID_LABELS["serial_number"],
+                        info=ID_INFO["serial_number"], visible=False
+                    )
+
+                granularity.change(
+                    fn=id_field_updates,
+                    inputs=granularity,
+                    outputs=[model_id, batch_number, serial_number, level_hint]
                 )
 
-            gr.Markdown("#### Таних мэдээлэл · Identification")
-            level_hint = gr.Markdown(LEVEL_HINTS[None])
-            with gr.Row():
-                model_id = gr.Textbox(
-                    label=ID_LABELS["model_id"], visible=False
-                )
-                batch_number = gr.Textbox(
-                    label=ID_LABELS["batch_number"], visible=False
-                )
-                serial_number = gr.Textbox(
-                    label=ID_LABELS["serial_number"], visible=False
-                )
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.HTML('<h3 class="mcbi-step-title"><span>3</span>'
+                        'Үйлдвэрлэл · Manufacturing</h3>')
+                with gr.Row():
+                    country = gr.Textbox(
+                        label="Үйлдвэрлэсэн улс",
+                        info="Country of manufacture",
+                        placeholder="ж: Чех, Хятад, Солонгос"
+                    )
+                    manufacture_date = gr.Textbox(
+                        label="Үйлдвэрлэсэн сар",
+                        info="Manufacturing month (YYYY-MM)",
+                        placeholder="2026-09"
+                    )
+                    status = gr.Dropdown(
+                        [(STATUS_MN[s], s) for s in STATUSES],
+                        value="original",
+                        label="Амьдралын мөчлөг",
+                        info="Lifecycle status"
+                    )
 
-            granularity.change(
-                fn=id_field_updates,
-                inputs=granularity,
-                outputs=[model_id, batch_number, serial_number, level_hint]
-            )
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.HTML('<h3 class="mcbi-step-title"><span>4</span>'
+                        'Баталгаажуулах · Confirm</h3>')
+                registration_key = gr.Textbox(
+                    label="Бүртгэлийн түлхүүр",
+                    info="Registration key — MCBI-ээс олгосон түлхүүр",
+                    type="password"
+                )
+                with gr.Row():
+                    register_button = gr.Button(
+                        "Батарей бүртгэх · Register battery",
+                        variant="primary", size="lg", scale=3
+                    )
+                    clear_button = gr.Button(
+                        "Цэвэрлэх · Clear", variant="secondary",
+                        size="lg", scale=1
+                    )
 
-            gr.Markdown("#### Үйлдвэрлэл · Manufacturing")
-            with gr.Row():
-                country = gr.Textbox(
-                    label="Үйлдвэрлэсэн улс · Country of manufacture" + REQUIRED
-                )
-                manufacture_date = gr.Textbox(
-                    label="Үйлдвэрлэсэн огноо · Manufacturing date" + REQUIRED,
-                    placeholder="YYYY-MM (2026-09)"
-                )
-
-            status = gr.Dropdown(
-                list(STATUSES),
-                value="original",
-                label="Амьдралын мөчлөгийн төлөв · Lifecycle status" + REQUIRED
-            )
-            registration_key = gr.Textbox(
-                label="Бүртгэлийн түлхүүр · Registration key" + REQUIRED,
-                type="password"
-            )
-            register_button = gr.Button(
-                "Батарей бүртгэх · Register battery",
-                variant="primary"
-            )
-
-            success_banner = gr.Markdown(visible=False)
-            battery_id_output = gr.Textbox(
-                label="Шинэ батарейн ID · New Battery ID",
-                interactive=False,
-                buttons=["copy"]
-            )
-            with gr.Row():
-                record_output = gr.Textbox(
-                    label="Бүртгэлийн дэлгэрэнгүй (нууц) · Record (private)",
-                    lines=14,
-                    interactive=False
-                )
-                qr_output = gr.Image(
-                    label="QR код — батарейд наах · QR code for the label",
-                    type="pil",
-                    interactive=False,
-                    height=260
-                )
-            register_link = gr.Textbox(
-                label="Бүртгэлийн холбоос · Record link",
-                interactive=False,
-                buttons=["copy"]
-            )
-            with gr.Row():
-                qr_download = gr.DownloadButton(
-                    "⬇️ QR код татах · Download QR code",
-                    variant="primary",
-                    visible=False
-                )
-                register_another = gr.Button(
-                    "➕ Өөр батарей бүртгэх · Register another battery",
-                    variant="secondary",
-                    visible=False
-                )
+            with gr.Column(visible=False) as result_group:
+                result_card = gr.HTML()
+                with gr.Row():
+                    battery_id_output = gr.Textbox(
+                        label="Батарейн ID", info="Battery ID",
+                        interactive=False, buttons=["copy"]
+                    )
+                    register_link = gr.Textbox(
+                        label="Нийтийн холбоос", info="Public link",
+                        interactive=False, buttons=["copy"]
+                    )
+                with gr.Row():
+                    qr_download = gr.DownloadButton(
+                        "QR шошго татах · Download QR (PNG)",
+                        variant="primary", size="lg"
+                    )
+                    register_another = gr.Button(
+                        "Дараагийн батарей бүртгэх · Register another",
+                        variant="secondary", size="lg"
+                    )
 
             battery_fields = [
                 category, chemistry, weight, capacity, capacity_unit,
@@ -855,8 +1174,8 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 country, manufacture_date, status
             ]
             result_outputs = [
-                battery_id_output, record_output, qr_output, register_link,
-                success_banner, qr_download, register_another
+                result_group, result_card, battery_id_output, register_link,
+                qr_download
             ]
 
             register_button.click(
@@ -888,115 +1207,120 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 outputs=battery_fields
             ).then(fn=None, js=SCROLL_TOP_JS)
 
-            gr.Button(
-                "🧹 Маягт цэвэрлэх · Clear form",
-                variant="secondary"
-            ).click(
+            clear_button.click(
                 fn=clear_battery_fields,
                 inputs=[],
                 outputs=battery_fields
             )
 
         # ---------- 3. Admin ----------
-        with gr.Tab("⚙️ Админ / Admin", id="admin"):
-            gr.Markdown(
-                "Түлхүүрээ бусадтай хуваалцах, нийтийн компьютер дээр "
-                "үлдээхгүй байгаарай. · Do not share your key or leave it "
-                "on a shared computer."
+        with gr.Tab("Админ · Admin", id="admin"):
+            gr.HTML(
+                '<div class="mcbi-intro"><h2>Админ</h2>'
+                '<p>Түлхүүрээ бусадтай хуваалцах, нийтийн компьютер дээр '
+                'үлдээхгүй байгаарай. · Do not share your key or leave it '
+                'on a shared computer.</p></div>'
             )
-            admin_key = gr.Textbox(
-                label="Админ түлхүүр · Admin key",
-                type="password"
-            )
-
-            recent_records = gr.Textbox(
-                label="Сүүлийн бүртгэлүүд · Recent registrations",
-                lines=10,
-                interactive=False
-            )
-            gr.Button("Бүртгэлүүдийг харах · Show registrations").click(
-                fn=admin_list_batteries,
-                inputs=admin_key,
-                outputs=recent_records
-            )
-
-            admin_id = gr.Textbox(label="Батарейн ID · Battery ID")
-
-            with gr.Row():
-                view_button = gr.Button("Дэлгэрэнгүй · Private record")
-                history_button = gr.Button("Түүх · History")
-            admin_result = gr.Textbox(
-                label="Нууц мэдээлэл · Private record",
-                lines=14,
-                interactive=False
-            )
-            history_result = gr.Textbox(
-                label="Бүртгэл ба төлөвийн түүх · History",
-                lines=8,
-                interactive=False
-            )
-            view_button.click(
-                fn=admin_find_battery,
-                inputs=[admin_id, admin_key],
-                outputs=admin_result
-            )
-            history_button.click(
-                fn=admin_history,
-                inputs=[admin_id, admin_key],
-                outputs=history_result
-            )
-
-            gr.Markdown("#### Төлөв өөрчлөх · Change status")
-            with gr.Row():
-                new_status = gr.Dropdown(
-                    list(STATUSES),
-                    label="Шинэ төлөв · New status"
+            with gr.Column(elem_classes="mcbi-card"):
+                admin_key = gr.Textbox(
+                    label="Админ түлхүүр", info="Admin key",
+                    type="password"
                 )
-                status_reason = gr.Textbox(
-                    label="Шалтгаан · Reason"
-                )
-            status_result = gr.Textbox(
-                label="Үр дүн · Result",
-                interactive=False
-            )
-            gr.Button("Төлөв шинэчлэх · Update status").click(
-                fn=change_status,
-                inputs=[admin_id, new_status, status_reason, admin_key],
-                outputs=status_result
-            )
 
-            gr.Markdown(
-                "#### Бүртгэл засах · Correct a record\n"
-                "Алдаатай бичсэн талбарыг засна. Хуучин утга түүхэнд "
-                "хадгалагдана. · Fix a mistyped field; the old value is "
-                "kept in the history."
-            )
-            with gr.Row():
-                edit_field = gr.Dropdown(
-                    list(EDITABLE_FIELDS),
-                    label="Засах талбар · Field"
+                recent_records = gr.Textbox(
+                    label="Сүүлийн бүртгэлүүд",
+                    info="Recent registrations",
+                    lines=10,
+                    interactive=False
                 )
-                edit_value = gr.Textbox(
-                    label="Зөв утга · Correct value"
+                gr.Button("Бүртгэлүүдийг харах · Show registrations").click(
+                    fn=admin_list_batteries,
+                    inputs=admin_key,
+                    outputs=recent_records
                 )
-            edit_reason = gr.Textbox(
-                label="Шалтгаан · Reason",
-                placeholder="Жишээ нь: Багтаамжийг буруу бичсэн"
-            )
-            edit_result = gr.Textbox(
-                label="Үр дүн · Result",
-                interactive=False
-            )
-            gr.Button("Засвар хадгалах · Save correction").click(
-                fn=edit_battery,
-                inputs=[admin_id, edit_field, edit_value, edit_reason, admin_key],
-                outputs=edit_result
-            )
+
+            with gr.Column(elem_classes="mcbi-card"):
+                admin_id = gr.Textbox(label="Батарейн ID", info="Battery ID")
+
+                with gr.Row():
+                    view_button = gr.Button("Дэлгэрэнгүй · Private record")
+                    history_button = gr.Button("Түүх · History")
+                admin_result = gr.Textbox(
+                    label="Нууц мэдээлэл", info="Private record",
+                    lines=14,
+                    interactive=False
+                )
+                history_result = gr.Textbox(
+                    label="Бүртгэл ба төлөвийн түүх", info="History",
+                    lines=8,
+                    interactive=False
+                )
+                view_button.click(
+                    fn=admin_find_battery,
+                    inputs=[admin_id, admin_key],
+                    outputs=admin_result
+                )
+                history_button.click(
+                    fn=admin_history,
+                    inputs=[admin_id, admin_key],
+                    outputs=history_result
+                )
+
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.HTML('<h3 class="mcbi-step-title">'
+                        'Төлөв өөрчлөх · Change status</h3>')
+                with gr.Row():
+                    new_status = gr.Dropdown(
+                        [(f"{STATUS_MN[s]} · {s}", s) for s in STATUSES],
+                        label="Шинэ төлөв", info="New status"
+                    )
+                    status_reason = gr.Textbox(
+                        label="Шалтгаан", info="Reason"
+                    )
+                status_result = gr.Textbox(
+                    label="Үр дүн", info="Result",
+                    interactive=False
+                )
+                gr.Button("Төлөв шинэчлэх · Update status").click(
+                    fn=change_status,
+                    inputs=[admin_id, new_status, status_reason, admin_key],
+                    outputs=status_result
+                )
+
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.HTML('<h3 class="mcbi-step-title">'
+                        'Бүртгэл засах · Correct a record</h3>'
+                        '<p class="mcbi-small">Алдаатай бичсэн талбарыг засна. '
+                        'Хуучин утга түүхэнд хадгалагдана. · Fix a mistyped '
+                        'field; the old value is kept in the history.</p>')
+                with gr.Row():
+                    edit_field = gr.Dropdown(
+                        list(EDITABLE_FIELDS),
+                        label="Засах талбар", info="Field"
+                    )
+                    edit_value = gr.Textbox(
+                        label="Зөв утга", info="Correct value"
+                    )
+                edit_reason = gr.Textbox(
+                    label="Шалтгаан", info="Reason",
+                    placeholder="Жишээ нь: Багтаамжийг буруу бичсэн"
+                )
+                edit_result = gr.Textbox(
+                    label="Үр дүн", info="Result",
+                    interactive=False
+                )
+                gr.Button("Засвар хадгалах · Save correction").click(
+                    fn=edit_battery,
+                    inputs=[admin_id, edit_field, edit_value, edit_reason,
+                            admin_key],
+                    outputs=edit_result
+                )
 
     gr.Markdown(
         """
         ---
-        **MCBI EPR Pilot — N-064** · Туршилтын хувилбар · Pilot prototype
+        **MCBI EPR Pilot — N-064** · Монголын тойрог батарейн санаачилга ·
+        Туршилтын хувилбар · Pilot prototype
         """,
         elem_id="mcbi-footer"
     )
@@ -1004,8 +1328,9 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
     demo.load(
         fn=load_battery_from_url,
         inputs=[],
-        outputs=[lookup_id, lookup_result, lookup_qr, lookup_link]
+        outputs=[lookup_id, lookup_card, lookup_link]
     )
+    demo.load(fn=lambda: (None, None), inputs=[], outputs=[weight, capacity])
 
 
 port = int(os.getenv("PORT", "10000"))
@@ -1016,5 +1341,5 @@ demo.launch(
     ssr_mode=False,
     pwa=True,
     css=CSS,
-    theme=gr.themes.Soft(primary_hue="emerald")
+    theme=THEME
 )
