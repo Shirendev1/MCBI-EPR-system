@@ -3,6 +3,8 @@ import hmac
 import html
 import io
 import math
+import hashlib
+import secrets
 import os
 import re
 import tempfile
@@ -88,6 +90,75 @@ def require_admin_key(key, kind="admin"):
             "Админ түлхүүр хоосон эсвэл буруу байна. · "
             "Admin key is missing or incorrect."
         )
+
+
+def hash_password(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 310000)
+    return salt + ":" + digest.hex()
+
+
+def password_matches(password, stored):
+    try:
+        salt, digest = stored.split(":", 1)
+        return hmac.compare_digest(hash_password(password, salt).split(":", 1)[1], digest)
+    except (ValueError, AttributeError):
+        return False
+
+
+def create_organization(name, email, password):
+    name = required_text(name, "Байгууллагын нэр")
+    email = required_text(email, "Имэйл").lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise gr.Error("Имэйл хаягаа шалгана уу.")
+    if len(password or "") < 12:
+        raise gr.Error("Нууц үг хамгийн багадаа 12 тэмдэгттэй байна.")
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM organizations WHERE email=%s", (email,))
+                if cur.fetchone():
+                    raise gr.Error("Энэ имэйлээр байгууллага бүртгэлтэй байна.")
+                cur.execute("INSERT INTO organizations (name,email,password_hash) VALUES (%s,%s,%s)",
+                            (name, email, hash_password(password)))
+    return "Хүсэлт илгээгдлээ. MCBI админ зөвшөөрсний дараа батарей бүртгэх боломжтой."
+
+
+def authenticate_organization(email, password):
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,name,password_hash,approved FROM organizations WHERE email=%s", ((email or "").strip().lower(),))
+            record = cur.fetchone()
+    if not record or not password_matches(password or "", record[2]):
+        raise gr.Error("Байгууллагын имэйл эсвэл нууц үг буруу.")
+    if not record[3]:
+        raise gr.Error("Байгууллагын бүртгэлийг админ хараахан зөвшөөрөөгүй байна.")
+    return record[0], record[1]
+
+
+def list_organizations(admin_key):
+    require_admin_key(admin_key)
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,name,email,approved FROM organizations ORDER BY id DESC LIMIT 100")
+            rows = cur.fetchall()
+    return "\n".join(f"ID {i} | {name} | {email} | {'Зөвшөөрсөн' if approved else 'Хүлээгдэж буй'}" for i,name,email,approved in rows) or "Байгууллага алга."
+
+
+def approve_organization(org_id, admin_key):
+    require_admin_key(admin_key)
+    try:
+        org_id = int(org_id)
+    except (ValueError, TypeError):
+        raise gr.Error("Байгууллагын ID тоо байх ёстой.")
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE organizations SET approved=TRUE WHERE id=%s RETURNING name", (org_id,))
+                row = cur.fetchone()
+                if not row:
+                    raise gr.Error("Байгууллага олдсонгүй.")
+    return f"{row[0]} байгууллагыг зөвшөөрлөө."
 
 
 def required_text(value, label):
@@ -369,6 +440,18 @@ def init_database():
                 """)
 
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS organizations (
+                        id BIGSERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        email TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        approved BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cur.execute("ALTER TABLE batteries ADD COLUMN IF NOT EXISTS organization_id BIGINT REFERENCES organizations(id)")
+
+                cur.execute("""
                     ALTER TABLE batteries
                     ADD COLUMN IF NOT EXISTS capacity_unit TEXT
                 """)
@@ -393,11 +476,11 @@ def register_battery(
     country,
     manufacture_date,
     status,
-    registration_key
+    registration_key, organization_email, organization_password
 ):
-    require_admin_key(registration_key, "registration")
+    org_id, org_name = authenticate_organization(organization_email, organization_password)
 
-    company = required_text(company, "Компани · Company")
+    company = org_name  # Verified company identity; never trust a free-text company name
     if (
         category not in CATEGORIES
         or chemistry not in CHEMISTRIES
@@ -469,17 +552,17 @@ def register_battery(
                         id, company, category, chemistry, weight,
                         capacity, capacity_unit, granularity, model_id,
                         batch_number, serial_number, country,
-                        manufacture_date, status
+                        manufacture_date, status, organization_id
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s
                     )
                 """, (
                     battery_id, company, category, chemistry,
                     weight, capacity, capacity_unit, granularity,
                     model_id, batch_number, serial_number, country,
-                    manufacture_date, status
+                    manufacture_date, status, org_id
                 ))
 
                 cur.execute("""
@@ -1030,6 +1113,19 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     js=SYNC_URL_JS
                 )
 
+        # ---------- Organization onboarding ----------
+        with gr.Tab("Байгууллага бүртгүүлэх · Organization signup", id="organization"):
+            gr.Markdown("### Байгууллагын бүртгэл\nХүсэлтийг MCBI админ зөвшөөрсний дараа батарей бүртгэнэ.")
+            org_name_input = gr.Textbox(label="Байгууллагын нэр")
+            org_email_input = gr.Textbox(label="Байгууллагын имэйл")
+            org_password_input = gr.Textbox(label="Нууц үг (12+ тэмдэгт)", type="password")
+            org_signup_result = gr.Textbox(label="Үр дүн", interactive=False)
+            gr.Button("Байгууллага бүртгүүлэх", variant="primary").click(
+                fn=create_organization,
+                inputs=[org_name_input, org_email_input, org_password_input],
+                outputs=org_signup_result
+            )
+
         # ---------- 2. Registration (needs registration key) ----------
         with gr.Tab("Бүртгэх · Register", id="register"):
             gr.HTML(
@@ -1132,11 +1228,9 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             with gr.Column(elem_classes="mcbi-card"):
                 gr.HTML('<h3 class="mcbi-step-title"><span>4</span>'
                         'Баталгаажуулах · Confirm</h3>')
-                registration_key = gr.Textbox(
-                    label="Бүртгэлийн түлхүүр",
-                    info="Registration key — MCBI-ээс олгосон түлхүүр",
-                    type="password"
-                )
+                organization_email = gr.Textbox(label="Байгууллагын имэйл")
+                organization_password = gr.Textbox(label="Байгууллагын нууц үг", type="password")
+                registration_key = gr.State("")
                 with gr.Row():
                     register_button = gr.Button(
                         "Батарей бүртгэх · Register battery",
@@ -1184,7 +1278,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     company, category, chemistry, weight, capacity,
                     capacity_unit, granularity, model_id, batch_number,
                     serial_number, country, manufacture_date, status,
-                    registration_key
+                    registration_key, organization_email, organization_password
                 ],
                 outputs=result_outputs
             ).success(
@@ -1237,6 +1331,18 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     fn=admin_list_batteries,
                     inputs=admin_key,
                     outputs=recent_records
+                )
+
+            with gr.Column(elem_classes="mcbi-card"):
+                gr.Markdown("### Байгууллагын хүсэлт зөвшөөрөх")
+                organizations_result = gr.Textbox(label="Байгууллагууд", lines=8, interactive=False)
+                gr.Button("Байгууллагуудыг харах").click(
+                    fn=list_organizations, inputs=admin_key, outputs=organizations_result
+                )
+                approve_org_id = gr.Number(label="Зөвшөөрөх байгууллагын ID", precision=0)
+                approve_org_result = gr.Textbox(label="Зөвшөөрлийн үр дүн", interactive=False)
+                gr.Button("Байгууллага зөвшөөрөх", variant="primary").click(
+                    fn=approve_organization, inputs=[approve_org_id, admin_key], outputs=approve_org_result
                 )
 
             with gr.Column(elem_classes="mcbi-card"):
