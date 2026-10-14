@@ -80,7 +80,7 @@ def local_time(value):
 
 def require_admin_key(key, kind="admin"):
     expected = os.getenv("REGISTRATION_KEY")
-    if not expected or not hmac.compare_digest(key or "", expected):
+    if not expected or not hmac.compare_digest((key or "").encode("utf-8"), expected.encode("utf-8")):
         if kind == "registration":
             raise gr.Error(
                 "Бүртгэлийн түлхүүр хоосон эсвэл буруу байна. · "
