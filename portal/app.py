@@ -35,22 +35,22 @@ LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TIMEZONE", "Asia/Ulaanbaatar"))
 
 # Mongolian display names. The database keeps the English codes.
 CATEGORY_MN = {
-    "SLI": "Асаагуурын батарей (SLI)",
-    "EV": "Цахилгаан тээврийн хэрэгслийн (EV)",
-    "LMT": "Хөнгөн тээврийн (LMT)",
-    "Stationary": "Суурин хадгалалтын",
-    "Industrial": "Үйлдвэрийн",
-    "Consumer": "Зөөврийн / өргөн хэрэглээний",
+    "SLI": "Асаагуурын батарей (SLI) · Starting, lighting and ignition",
+    "EV": "Цахилгаан тээврийн хэрэгслийн (EV) · Electric vehicle",
+    "LMT": "Хөнгөн тээврийн (LMT) · Light means of transport",
+    "Stationary": "Суурин хадгалалтын · Stationary storage",
+    "Industrial": "Үйлдвэрийн · Industrial",
+    "Consumer": "Зөөврийн / өргөн хэрэглээний · Portable / consumer",
 }
-CHEMISTRY_MN = {"Lead-acid": "Хар тугалга-хүчил", "Other": "Бусад"}
+CHEMISTRY_MN = {"Lead-acid": "Хар тугалга-хүчил · Lead-acid", "Other": "Бусад · Other"}
 STATUS_MN = {
-    "original": "Шинэ",
-    "repurposed": "Өөр зориулалтад шилжүүлсэн",
-    "re-used": "Дахин ашигласан",
-    "remanufactured": "Дахин үйлдвэрлэсэн",
-    "waste": "Хаягдал",
+    "original": "Шинэ · Original",
+    "repurposed": "Өөр зориулалтад шилжүүлсэн · Repurposed",
+    "re-used": "Дахин ашигласан · Re-used",
+    "remanufactured": "Дахин үйлдвэрлэсэн · Remanufactured",
+    "waste": "Хаягдал · Waste",
 }
-LEVEL_MN = {"SKU": "Загвараар", "Batch": "Багцаар", "Unit": "Ширхэгээр"}
+LEVEL_MN = {"SKU": "Загвараар · Model / SKU", "Batch": "Багцаар · Batch", "Unit": "Ширхэгээр · Individual unit"}
 
 # Fields an admin may correct after registration: label -> column
 EDITABLE_FIELDS = {
@@ -107,21 +107,21 @@ def password_matches(password, stored):
 
 
 def create_organization(name, email, password):
-    name = required_text(name, "Байгууллагын нэр")
-    email = required_text(email, "Имэйл").lower()
+    name = required_text(name, "Байгууллагын нэр · Organization name")
+    email = required_text(email, "Имэйл · Email").lower()
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        raise gr.Error("Имэйл хаягаа шалгана уу.")
+        raise gr.Error("Имэйл хаягаа шалгана уу. · Please enter a valid email address.")
     if len(password or "") < 12:
-        raise gr.Error("Нууц үг хамгийн багадаа 12 тэмдэгттэй байна.")
+        raise gr.Error("Нууц үг хамгийн багадаа 12 тэмдэгттэй байна. · Password must contain at least 12 characters.")
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM organizations WHERE email=%s", (email,))
                 if cur.fetchone():
-                    raise gr.Error("Энэ имэйлээр байгууллага бүртгэлтэй байна.")
+                    raise gr.Error("Энэ имэйлээр байгууллага бүртгэлтэй байна. · An organization with this email is already registered.")
                 cur.execute("INSERT INTO organizations (name,email,password_hash) VALUES (%s,%s,%s)",
                             (name, email, hash_password(password)))
-    return "Хүсэлт илгээгдлээ. MCBI админ зөвшөөрсний дараа батарей бүртгэх боломжтой."
+    return "Хүсэлт илгээгдлээ. MCBI админ зөвшөөрсний дараа батарей бүртгэх боломжтой. · Request submitted. You can register batteries after approval by an MCBI administrator."
 
 
 def authenticate_organization(email, password):
@@ -130,9 +130,9 @@ def authenticate_organization(email, password):
             cur.execute("SELECT id,name,password_hash,approved FROM organizations WHERE email=%s", ((email or "").strip().lower(),))
             record = cur.fetchone()
     if not record or not password_matches(password or "", record[2]):
-        raise gr.Error("Байгууллагын имэйл эсвэл нууц үг буруу.")
+        raise gr.Error("Байгууллагын имэйл эсвэл нууц үг буруу. · Incorrect organization email or password.")
     if not record[3]:
-        raise gr.Error("Байгууллагын бүртгэлийг админ хараахан зөвшөөрөөгүй байна.")
+        raise gr.Error("Байгууллагын бүртгэлийг админ хараахан зөвшөөрөөгүй байна. · Your organization is awaiting administrator approval.")
     return record[0], record[1]
 
 
@@ -142,7 +142,7 @@ def list_organizations(admin_key):
         with conn.cursor() as cur:
             cur.execute("SELECT id,name,email,approved FROM organizations ORDER BY id DESC LIMIT 100")
             rows = cur.fetchall()
-    return "\n".join(f"ID {i} | {name} | {email} | {'Зөвшөөрсөн' if approved else 'Хүлээгдэж буй'}" for i,name,email,approved in rows) or "Байгууллага алга."
+    return "\n".join(f"ID {i} | {name} | {email} | {'Зөвшөөрсөн · Approved' if approved else 'Хүлээгдэж буй · Pending'}" for i,name,email,approved in rows) or "Байгууллага алга. · No organizations found."
 
 
 def approve_organization(org_id, admin_key):
@@ -150,15 +150,15 @@ def approve_organization(org_id, admin_key):
     try:
         org_id = int(org_id)
     except (ValueError, TypeError):
-        raise gr.Error("Байгууллагын ID тоо байх ёстой.")
+        raise gr.Error("Байгууллагын ID тоо байх ёстой. · Organization ID must be a number.")
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE organizations SET approved=TRUE WHERE id=%s RETURNING name", (org_id,))
                 row = cur.fetchone()
                 if not row:
-                    raise gr.Error("Байгууллага олдсонгүй.")
-    return f"{row[0]} байгууллагыг зөвшөөрлөө."
+                    raise gr.Error("Байгууллага олдсонгүй. · Organization not found.")
+    return f"{row[0]} байгууллагыг зөвшөөрлөө. · Organization approved."
 
 
 def required_text(value, label):
@@ -233,19 +233,19 @@ ID_INFO = {
 LEVEL_HINTS = {
     None: (
         "Эхлээд **бүртгэлийн түвшнээ** сонгоно уу. Доорх талбарууд "
-        "түүнээс хамаарна."
+        "түүнээс хамаарна. · Select a registration level first; the identification fields depend on it."
     ),
     "SKU": (
         "**Загвараар** — нэг загварыг бүхэлд нь бүртгэнэ. Зөвхөн загварын "
-        "дугаар хэрэгтэй."
+        "дугаар хэрэгтэй. · Model / SKU: a model identifier is required."
     ),
     "Batch": (
         "**Багцаар** — нэг үйлдвэрлэлийн багцыг бүртгэнэ. Багцын дугаар "
-        "заавал, загвар нь сонголтоор."
+        "заавал, загвар нь сонголтоор. · Batch: batch number is required; model is optional."
     ),
     "Unit": (
         "**Ширхэгээр** — нэг ширхэг батарейг бүртгэнэ. Серийн дугаар "
-        "заавал, загвар ба багц сонголтоор."
+        "заавал, загвар ба багц сонголтоор. · Individual unit: serial number is required; model and batch are optional."
     ),
 }
 
@@ -258,7 +258,7 @@ def id_field_updates(level):
         if name in fields:
             updates.append(gr.update(
                 visible=True,
-                label=label + ("" if fields[name] else " (сонголтоор)")
+                label=label + ("" if fields[name] else " (сонголтоор · optional)")
             ))
         else:
             updates.append(gr.update(visible=False, value=""))
@@ -286,9 +286,9 @@ def lifecycle_html(status):
         "remanufactured": 1, "waste": 2,
     }.get(status, 0)
     steps = (
-        "Шинэ · ашиглалтад",
-        "Дахин ашиглалт / хоёр дахь амьдрал",
-        "Цуглуулалт ба дахин боловсруулалт",
+        "Шинэ · ашиглалтад / Original · In use",
+        "Дахин ашиглалт / хоёр дахь амьдрал · Reuse / second life",
+        "Цуглуулалт ба дахин боловсруулалт · Collection and recycling",
     )
     items = []
     for index, text in enumerate(steps):
@@ -326,7 +326,7 @@ def public_card(record):
 <div class="mcbi-passport">
   <div class="mcbi-passport-dark">
     <span class="mcbi-eyebrow">БАТАРЕЙН ПАСПОРТ · BATTERY PASSPORT</span>
-    <span class="mcbi-big">{esc(CHEMISTRY_MN.get(chemistry, chemistry))} батарей</span>
+    <span class="mcbi-big">{esc(CHEMISTRY_MN.get(chemistry, chemistry))} · Battery / батарей</span>
     <span class="mcbi-muted-light">{esc(CATEGORY_MN.get(category, category))}</span>
     <span class="mcbi-id">{esc(battery_id)}</span>
     <img class="mcbi-qr" src="{qr}" alt="QR код · QR code">
@@ -373,7 +373,7 @@ def private_card(values, qr_image):
 <div class="mcbi-passport">
   <div class="mcbi-passport-dark">
     <img class="mcbi-qr" src="{qr}" alt="QR код · QR code">
-    <span class="mcbi-eyebrow">БАТАРЕЙН ID</span>
+    <span class="mcbi-eyebrow">БАТАРЕЙН ID · BATTERY ID</span>
     <span class="mcbi-id">{esc(values['battery_id'])}</span>
   </div>
   <div class="mcbi-passport-body">
@@ -1079,7 +1079,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
         # ---------- 1. Public lookup (default tab; QR links open here) ----------
         with gr.Tab("Хайх · Find", id="find"):
             gr.HTML(
-                '<div class="mcbi-intro"><h2>Батарей хайх</h2>'
+                '<div class="mcbi-intro"><h2>Батарей хайх · Find a battery</h2>'
                 '<p>Батарейн ID-г оруулах эсвэл QR кодыг уншуулна уу. · '
                 'Enter a Battery ID or scan its QR code.</p></div>'
             )
@@ -1115,12 +1115,12 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
 
         # ---------- Organization onboarding ----------
         with gr.Tab("Байгууллага бүртгүүлэх · Organization signup", id="organization"):
-            gr.Markdown("### Байгууллагын бүртгэл\nХүсэлтийг MCBI админ зөвшөөрсний дараа батарей бүртгэнэ.")
-            org_name_input = gr.Textbox(label="Байгууллагын нэр")
-            org_email_input = gr.Textbox(label="Байгууллагын имэйл")
-            org_password_input = gr.Textbox(label="Нууц үг (12+ тэмдэгт)", type="password")
-            org_signup_result = gr.Textbox(label="Үр дүн", interactive=False)
-            gr.Button("Байгууллага бүртгүүлэх", variant="primary").click(
+            gr.Markdown("### Байгууллагын бүртгэл · Organization signup\nХүсэлтийг MCBI админ зөвшөөрсний дараа батарей бүртгэнэ.\nRegister your organization below. Battery registration becomes available after administrator approval.")
+            org_name_input = gr.Textbox(label="Байгууллагын нэр · Organization name")
+            org_email_input = gr.Textbox(label="Байгууллагын имэйл · Organization email")
+            org_password_input = gr.Textbox(label="Нууц үг (12+ тэмдэгт) · Password (12+ characters)", type="password")
+            org_signup_result = gr.Textbox(label="Үр дүн · Result", interactive=False)
+            gr.Button("Байгууллага бүртгүүлэх · Submit organization request", variant="primary").click(
                 fn=create_organization,
                 inputs=[org_name_input, org_email_input, org_password_input],
                 outputs=org_signup_result
@@ -1129,7 +1129,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
         # ---------- 2. Registration (needs registration key) ----------
         with gr.Tab("Бүртгэх · Register", id="register"):
             gr.HTML(
-                '<div class="mcbi-intro"><h2>Батарей бүртгэх</h2>'
+                '<div class="mcbi-intro"><h2>Батарей бүртгэх · Register a battery</h2>'
                 '<p>Бүртгэл бүр өвөрмөц ID, QR код, нийтийн холбоос авна. '
                 '«Сонголтоор» гэснээс бусад бүх талбар заавал. · '
                 'All fields are required unless marked optional.</p></div>'
@@ -1142,7 +1142,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     company = gr.Textbox(
                         label="Компани / Импортлогч",
                         info="Company / Importer",
-                        placeholder="Компанийн нэр"
+                        placeholder="Компанийн нэр · Company name"
                     )
                     category = gr.Dropdown(
                         [(f"{CATEGORY_MN[c]}", c) for c in CATEGORIES],
@@ -1211,7 +1211,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     country = gr.Textbox(
                         label="Үйлдвэрлэсэн улс",
                         info="Country of manufacture",
-                        placeholder="ж: Чех, Хятад, Солонгос"
+                        placeholder="e.g. Czech Republic, China, South Korea · ж: Чех, Хятад, Өмнөд Солонгос"
                     )
                     manufacture_date = gr.Textbox(
                         label="Үйлдвэрлэсэн сар",
@@ -1228,8 +1228,8 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             with gr.Column(elem_classes="mcbi-card"):
                 gr.HTML('<h3 class="mcbi-step-title"><span>4</span>'
                         'Баталгаажуулах · Confirm</h3>')
-                organization_email = gr.Textbox(label="Байгууллагын имэйл")
-                organization_password = gr.Textbox(label="Байгууллагын нууц үг", type="password")
+                organization_email = gr.Textbox(label="Байгууллагын имэйл · Organization email")
+                organization_password = gr.Textbox(label="Байгууллагын нууц үг · Organization password", type="password")
                 registration_key = gr.State("")
                 with gr.Row():
                     register_button = gr.Button(
@@ -1310,7 +1310,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
         # ---------- 3. Admin ----------
         with gr.Tab("Админ · Admin", id="admin"):
             gr.HTML(
-                '<div class="mcbi-intro"><h2>Админ</h2>'
+                '<div class="mcbi-intro"><h2>Админ · Administration</h2>'
                 '<p>Түлхүүрээ бусадтай хуваалцах, нийтийн компьютер дээр '
                 'үлдээхгүй байгаарай. · Do not share your key or leave it '
                 'on a shared computer.</p></div>'
@@ -1334,14 +1334,14 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 )
 
             with gr.Column(elem_classes="mcbi-card"):
-                gr.Markdown("### Байгууллагын хүсэлт зөвшөөрөх")
-                organizations_result = gr.Textbox(label="Байгууллагууд", lines=8, interactive=False)
-                gr.Button("Байгууллагуудыг харах").click(
+                gr.Markdown("### Байгууллагын хүсэлт зөвшөөрөх · Approve organization requests")
+                organizations_result = gr.Textbox(label="Байгууллагууд · Organizations", lines=8, interactive=False)
+                gr.Button("Байгууллагуудыг харах · Show organizations").click(
                     fn=list_organizations, inputs=admin_key, outputs=organizations_result
                 )
-                approve_org_id = gr.Number(label="Зөвшөөрөх байгууллагын ID", precision=0)
-                approve_org_result = gr.Textbox(label="Зөвшөөрлийн үр дүн", interactive=False)
-                gr.Button("Байгууллага зөвшөөрөх", variant="primary").click(
+                approve_org_id = gr.Number(label="Зөвшөөрөх байгууллагын ID · Organization ID to approve", precision=0)
+                approve_org_result = gr.Textbox(label="Зөвшөөрлийн үр дүн · Approval result", interactive=False)
+                gr.Button("Байгууллага зөвшөөрөх · Approve organization", variant="primary").click(
                     fn=approve_organization, inputs=[approve_org_id, admin_key], outputs=approve_org_result
                 )
 
@@ -1384,7 +1384,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                         label="Шалтгаан", info="Reason"
                     )
                 status_result = gr.Textbox(
-                    label="Үр дүн", info="Result",
+                    label="Үр дүн · Result", info="Result",
                     interactive=False
                 )
                 gr.Button("Төлөв шинэчлэх · Update status").click(
@@ -1409,10 +1409,10 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     )
                 edit_reason = gr.Textbox(
                     label="Шалтгаан", info="Reason",
-                    placeholder="Жишээ нь: Багтаамжийг буруу бичсэн"
+                    placeholder="Жишээ нь: Багтаамжийг буруу бичсэн · e.g. Correcting a mistyped capacity"
                 )
                 edit_result = gr.Textbox(
-                    label="Үр дүн", info="Result",
+                    label="Үр дүн · Result", info="Result",
                     interactive=False
                 )
                 gr.Button("Засвар хадгалах · Save correction").click(
