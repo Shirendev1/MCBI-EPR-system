@@ -8,7 +8,9 @@ import secrets
 import os
 import re
 import tempfile
+import time
 import uuid
+from collections import defaultdict
 from contextlib import closing
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -78,14 +80,29 @@ def local_time(value):
     return value.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
-def require_admin_key(key, kind="admin"):
+# ---------- Login attempt limiting (kept in memory; resets on restart) ----------
+
+FAILED_LOGINS = defaultdict(list)
+MAX_ATTEMPTS = 5
+LOCK_SECONDS = 15 * 60
+
+
+def check_login_limit(key):
+    """Block a key (email or admin) after too many recent failures."""
+    now = time.time()
+    FAILED_LOGINS[key] = [t for t in FAILED_LOGINS[key] if now - t < LOCK_SECONDS]
+    if len(FAILED_LOGINS[key]) >= MAX_ATTEMPTS:
+        raise gr.Error(
+            "Хэт олон буруу оролдлого. 15 минутын дараа дахин оролдоно уу. · "
+            "Too many failed attempts. Try again in 15 minutes."
+        )
+
+
+def require_admin_key(key):
+    check_login_limit("__admin__")
     expected = os.getenv("REGISTRATION_KEY")
     if not expected or not hmac.compare_digest((key or "").encode("utf-8"), expected.encode("utf-8")):
-        if kind == "registration":
-            raise gr.Error(
-                "Бүртгэлийн түлхүүр хоосон эсвэл буруу байна. · "
-                "Registration key is missing or incorrect."
-            )
+        FAILED_LOGINS["__admin__"].append(time.time())
         raise gr.Error(
             "Админ түлхүүр хоосон эсвэл буруу байна. · "
             "Admin key is missing or incorrect."
@@ -125,12 +142,16 @@ def create_organization(name, email, password):
 
 
 def authenticate_organization(email, password):
+    email = (email or "").strip().lower()
+    check_login_limit(email)
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id,name,password_hash,approved FROM organizations WHERE email=%s", ((email or "").strip().lower(),))
+            cur.execute("SELECT id,name,password_hash,approved FROM organizations WHERE email=%s", (email,))
             record = cur.fetchone()
     if not record or not password_matches(password or "", record[2]):
+        FAILED_LOGINS[email].append(time.time())
         raise gr.Error("Байгууллагын имэйл эсвэл нууц үг буруу. · Incorrect organization email or password.")
+    FAILED_LOGINS.pop(email, None)
     if not record[3]:
         raise gr.Error("Байгууллагын бүртгэлийг админ хараахан зөвшөөрөөгүй байна. · Your organization is awaiting administrator approval.")
     return record[0], record[1]
@@ -476,7 +497,8 @@ def register_battery(
     country,
     manufacture_date,
     status,
-    registration_key, organization_email, organization_password
+    organization_email,
+    organization_password
 ):
     org_id, org_name = authenticate_organization(organization_email, organization_password)
 
@@ -967,11 +989,18 @@ THEME = gr.themes.Base(
     button_large_radius="10px",
 )
 
-LOGO_URI = "data:image/png;base64,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"
+# Paste the long "data:image/png;base64,..." logo string from your old app.py
+# between the quotes below. Left empty, the header simply shows no logo.
+LOGO_URI = ""
+
+_LOGO_TAG = (
+    f'<img src="{LOGO_URI}" alt="MCBI лого" width="52" height="52">'
+    if LOGO_URI else ""
+)
 
 HEADER_HTML = f"""
 <header class="mcbi-header">
-  <img src="{LOGO_URI}" alt="MCBI лого" width="52" height="52">
+  {_LOGO_TAG}
   <div class="mcbi-brand">
     <span class="mcbi-title">MCBI EPR</span>
     <span class="mcbi-sub">Монголын тойрог батарейн санаачилга ·
@@ -1126,7 +1155,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 outputs=org_signup_result
             )
 
-        # ---------- 2. Registration (needs registration key) ----------
+        # ---------- 2. Registration (needs an approved organization login) ----------
         with gr.Tab("Бүртгэх · Register", id="register"):
             gr.HTML(
                 '<div class="mcbi-intro"><h2>Батарей бүртгэх · Register a battery</h2>'
@@ -1138,12 +1167,14 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             with gr.Column(elem_classes="mcbi-card"):
                 gr.HTML('<h3 class="mcbi-step-title"><span>1</span>'
                         'Үндсэн мэдээлэл · Basic information</h3>')
+                # The company name is taken from the logged-in organization,
+                # so there is no company field to fill in.
+                company = gr.State("")
+                gr.Markdown(
+                    "Компани нь таны байгууллагын нэрээр автоматаар бүртгэгдэнэ. · "
+                    "Company is filled in automatically from your organization."
+                )
                 with gr.Row():
-                    company = gr.Textbox(
-                        label="Компани / Импортлогч",
-                        info="Company / Importer",
-                        placeholder="Компанийн нэр · Company name"
-                    )
                     category = gr.Dropdown(
                         [(f"{CATEGORY_MN[c]}", c) for c in CATEGORIES],
                         value=None,
@@ -1230,7 +1261,6 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                         'Баталгаажуулах · Confirm</h3>')
                 organization_email = gr.Textbox(label="Байгууллагын имэйл · Organization email")
                 organization_password = gr.Textbox(label="Байгууллагын нууц үг · Organization password", type="password")
-                registration_key = gr.State("")
                 with gr.Row():
                     register_button = gr.Button(
                         "Батарей бүртгэх · Register battery",
@@ -1278,13 +1308,13 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     company, category, chemistry, weight, capacity,
                     capacity_unit, granularity, model_id, batch_number,
                     serial_number, country, manufacture_date, status,
-                    registration_key, organization_email, organization_password
+                    organization_email, organization_password
                 ],
                 outputs=result_outputs
             ).success(
                 # Clear the battery fields after a successful registration so
                 # the same battery is not registered twice by accident.
-                # Company and the registration key stay filled.
+                # The organization email and password stay filled.
                 fn=clear_battery_fields,
                 inputs=[],
                 outputs=battery_fields
