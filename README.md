@@ -9,8 +9,8 @@
 Developed by the **Mongolia Circular Battery Initiative (MCBI)** as part of the COP17 project pipeline entry **N-064**.
 **Монголын тойрог батарейн санаачилга (MCBI)**-ийн COP17 төслийн жагсаалтын **N-064** төслийн хүрээнд боловсруулав.
 
-> **Status / Төлөв:** It is being tested with real batteries. → Currently tested with test data only.
-Бодит батарей дээр туршиж байна. → Одоогоор зөвхөн туршилтын өгөгдлөөр шалгаж байна.
+> **Status / Төлөв:** Working pilot prototype, currently tested with test data only. It does not collect payments.
+> Ажиллаж буй туршилтын хувилбар. Одоогоор зөвхөн туршилтын өгөгдлөөр шалгаж байна. Төлбөр авдаггүй.
 
 ---
 
