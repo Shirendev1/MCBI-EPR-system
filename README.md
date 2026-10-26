@@ -4,13 +4,13 @@
 **Battery registration, QR identification and lifecycle tracking for Mongolia's Extended Producer Responsibility (EPR) pilot.**
 **Монголд үйлдвэрлэгчийн өргөтгөсөн хариуцлагын (EPR) тогтолцоог турших зорилгоор батарей бүртгэх, QR кодоор таних, амьдралын мөчлөгийг хянах систем.**
 
-🔗 **Live portal / Ажиллаж буй портал:** https://mcbi-epr-system.onrender.com
+🔗 **Live portal / Ажиллаж буй портал:** https://passport.mcbis.org
 
 Developed by the **Mongolia Circular Battery Initiative (MCBI)** as part of the COP17 project pipeline entry **N-064**.
 **Монголын тойрог батарейн санаачилга (MCBI)**-ийн COP17 төслийн жагсаалтын **N-064** төслийн хүрээнд боловсруулав.
 
-> **Status / Төлөв:** Working pilot prototype. It is being tested with real batteries. It does not collect payments.
-> Ажиллаж буй туршилтын хувилбар. Бодит батарей дээр туршиж байна. Төлбөр авдаггүй.
+> **Status / Төлөв:** It is being tested with real batteries. → Currently tested with test data only.
+Бодит батарей дээр туршиж байна. → Одоогоор зөвхөн туршилтын өгөгдлөөр шалгаж байна.
 
 ---
 
