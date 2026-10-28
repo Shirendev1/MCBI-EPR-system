@@ -3,7 +3,6 @@ import csv
 import hmac
 import html
 import io
-import json
 import math
 import hashlib
 import secrets
@@ -33,7 +32,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # that domain for good: printed QR labels live as long as the batteries do.
 PORTAL_URL = os.getenv(
     "PORTAL_URL",
-    "https://mcbi-epr-system.onrender.com"
+    "https://passport.mcbis.org"
 ).rstrip("/")
 
 CATEGORIES = ("SLI", "EV", "LMT", "Stationary", "Industrial", "Consumer")
@@ -272,6 +271,8 @@ TEXT = {
         "err_need_model": "Model / SKU is required for SKU registrations.",
         "err_need_batch": "Batch number is required for Batch registrations.",
         "err_need_serial": "Serial number is required for Unit registrations.",
+        "err_duplicate_serial": "Serial number {serial} is already registered by your organization (Battery ID {id}).",
+        "err_csv_dup_in_file": "Row {n}: serial number {serial} appears more than once in this file.",
         "err_enter_id": "Enter a Battery ID.",
         "err_battery_missing": "No battery record found for this ID.",
         "msg_no_batteries": "No batteries registered yet.",
@@ -489,6 +490,8 @@ TEXT = {
         "err_need_model": "Загвараар бүртгэхэд загварын дугаар заавал.",
         "err_need_batch": "Багцаар бүртгэхэд багцын дугаар заавал.",
         "err_need_serial": "Ширхэгээр бүртгэхэд серийн дугаар заавал.",
+        "err_duplicate_serial": "{serial} серийн дугаартай батарейг танай байгууллага аль хэдийн бүртгэсэн байна (Батарейн ID {id}).",
+        "err_csv_dup_in_file": "{n}-р мөр: {serial} серийн дугаар энэ файлд нэгээс олон удаа орсон байна.",
         "err_enter_id": "Батарейн ID оруулна уу.",
         "err_battery_missing": "Энэ ID-тай батарей олдсонгүй.",
         "msg_no_batteries": "Бүртгэл алга байна.",
@@ -1096,6 +1099,20 @@ def fetch_battery(cur, battery_id, lock=False):
     return dict(zip(BATTERY_COLUMNS + ("registered_at",), row))
 
 
+def existing_serials(cur, org_id, serials):
+    """Serial numbers (lower case) this organization has already registered,
+    mapped to their Battery ID."""
+    wanted = sorted({x.strip().lower() for x in serials if x and x.strip()})
+    if not wanted:
+        return {}
+    cur.execute(
+        "SELECT lower(serial_number), id FROM batteries "
+        "WHERE organization_id = %s AND lower(serial_number) = ANY(%s)",
+        (org_id, wanted)
+    )
+    return dict(cur.fetchall())
+
+
 def insert_battery(cur, org, c):
     """Insert one validated battery and its first history event."""
     battery_id = "MCBI-" + uuid.uuid4().hex[:16].upper()
@@ -1515,6 +1532,11 @@ def register_battery(
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn:
             with conn.cursor() as cur:
+                serial = c["serial_number"]
+                found = existing_serials(cur, org["id"], [serial])
+                if found:
+                    raise gr.Error(t(lang, "err_duplicate_serial", serial=serial,
+                                     id=found[serial.strip().lower()]))
                 battery_id = insert_battery(cur, org, c)
 
     qr = make_qr(battery_id)
@@ -1663,6 +1685,24 @@ def bulk_register(session, file_path, lang):
             cleaned.append((number, clean_battery(data, lang)))
         except InputError as error:
             problems.append(t(lang, "msg_csv_row", n=number, msg=str(error)))
+    seen = set()
+    for number, c in cleaned:
+        key = (c["serial_number"] or "").strip().lower()
+        if key and key in seen:
+            problems.append(t(lang, "err_csv_dup_in_file", n=number,
+                              serial=c["serial_number"]))
+        seen.add(key)
+    if not problems:
+        with closing(psycopg2.connect(DATABASE_URL)) as conn:
+            with conn.cursor() as cur:
+                found = existing_serials(
+                    cur, org["id"], [c["serial_number"] for _n, c in cleaned])
+        for number, c in cleaned:
+            key = (c["serial_number"] or "").strip().lower()
+            if key in found:
+                problems.append(t(lang, "msg_csv_row", n=number, msg=t(
+                    lang, "err_duplicate_serial", serial=c["serial_number"],
+                    id=found[key])))
     if problems:
         return "\n".join([t(lang, "msg_csv_errors")] + problems[:100]), None
 
