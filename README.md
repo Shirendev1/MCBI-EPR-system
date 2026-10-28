@@ -28,11 +28,12 @@ This portal is a small, working first step. It registers each battery, gives it 
 
 ## What it does / Юу хийдэг вэ
 
-The portal has five tabs. / Портал таван табтай.
+The portal has six tabs. / Портал зургаан табтай.
 
 | Tab / Таб | Who / Хэн | What / Юу хийх |
 |---|---|---|
 | 🔍 **Find / Хайх** | Anyone / Хэн ч | Look up a battery by ID or by scanning its QR code. Shows public information only. · ID эсвэл QR кодоор батарейг хайж, нийтийн мэдээллийг харна. |
+| 📈 **Dashboard / Хяналтын самбар** | Anyone / Хэн ч | Totals by category, lifecycle status, chemistry and month. Counts only, no company names or serial numbers. · Ангилал, төлөв, химийн төрөл, сараар нэгтгэсэн тоо. Зөвхөн тоо харагдана, компанийн нэр, серийн дугаар харагдахгүй. |
 | ➕ **Register / Бүртгэх** | Approved organizations / Зөвшөөрөгдсөн байгууллага | Register one battery, or many at once from a CSV file, and receive IDs and printable QR labels. Export your own records. · Нэг батарей эсвэл CSV файлаар олныг нэг дор бүртгэж, ID болон QR наалт авна. Өөрийн бүртгэлийг татаж авна. |
 | 📊 **EPR report / EPR тайлан** | Approved organizations / Зөвшөөрөгдсөн байгууллага | Report units and weight placed on the market per year and category. · Жил, ангиллаар зах зээлд нийлүүлсэн тоо ширхэг, жинг тайлагнана. |
 | 🏢 **Organization signup / Байгууллага бүртгүүлэх** | Companies, importers, recyclers / Компани, импортлогч, дахин боловсруулагч | Create an organization account. An administrator approves it before it can register batteries. · Байгууллагын бүртгэл үүсгэнэ. Админ зөвшөөрсний дараа батарей бүртгэх эрхтэй болно. |
@@ -147,10 +148,10 @@ Done / Хийгдсэн:
 - [x] Three access levels and a JSON API
 - [x] Duplicate serial number protection
 - [x] Permanent QR address on passport.mcbis.org
+- [x] Dashboard: registrations by category, status, chemistry and month
 
 Next / Дараагийн алхам:
 - [ ] Accounts for collection points
-- [ ] Dashboard: registrations by category and status
 - [ ] EPR fee simulation (scenarios only, no payments)
 - [ ] Pilot report for the Ministry of Environment and Climate Change
 
