@@ -28,13 +28,15 @@ This portal is a small, working first step. It registers each battery, gives it 
 
 ## What it does / Юу хийдэг вэ
 
-The portal has three tabs. / Портал гурван табтай.
+The portal has five tabs. / Портал таван табтай.
 
 | Tab / Таб | Who / Хэн | What / Юу хийх |
 |---|---|---|
 | 🔍 **Find / Хайх** | Anyone / Хэн ч | Look up a battery by ID or by scanning its QR code. Shows public information only. · ID эсвэл QR кодоор батарейг хайж, нийтийн мэдээллийг харна. |
-| ➕ **Register / Бүртгэх** | Key holders / Түлхүүртэй хэрэглэгч | Register a battery and receive its ID and a printable QR label. · Батарей бүртгэж, ID болон хэвлэх QR наалт авна. |
-| ⚙️ **Admin / Админ** | Key holders / Түлхүүртэй хэрэглэгч | List registrations, view private records and history, change lifecycle status, correct mistakes. · Бүртгэлүүдийг харах, түүх шалгах, төлөв өөрчлөх, алдаа засах. |
+| ➕ **Register / Бүртгэх** | Approved organizations / Зөвшөөрөгдсөн байгууллага | Register one battery, or many at once from a CSV file, and receive IDs and printable QR labels. Export your own records. · Нэг батарей эсвэл CSV файлаар олныг нэг дор бүртгэж, ID болон QR наалт авна. Өөрийн бүртгэлийг татаж авна. |
+| 📊 **EPR report / EPR тайлан** | Approved organizations / Зөвшөөрөгдсөн байгууллага | Report units and weight placed on the market per year and category. · Жил, ангиллаар зах зээлд нийлүүлсэн тоо ширхэг, жинг тайлагнана. |
+| 🏢 **Organization signup / Байгууллага бүртгүүлэх** | Companies, importers, recyclers / Компани, импортлогч, дахин боловсруулагч | Create an organization account. An administrator approves it before it can register batteries. · Байгууллагын бүртгэл үүсгэнэ. Админ зөвшөөрсний дараа батарей бүртгэх эрхтэй болно. |
+| ⚙️ **Admin / Админ** | MCBI administrators (admin key) / MCBI админ (админ түлхүүр) | Approve organizations, list registrations, view private records and history, change lifecycle status, correct mistakes, export all data, market summary. · Байгууллага зөвшөөрөх, бүртгэл харах, түүх шалгах, төлөв өөрчлөх, алдаа засах, бүх өгөгдлийг татах, зах зээлийн нэгтгэл. |
 
 ### Key features / Гол боломжууд
 
@@ -42,8 +44,12 @@ The portal has three tabs. / Портал гурван табтай.
   **Өвөрмөц ID ба QR код.** QR-ийг утсаар уншуулахад тухайн батарейн мэдээлэл шууд нээгдэнэ.
 - **Full history, nothing overwritten.** Registrations, status changes and corrections are all logged with time and reason.
   **Бүрэн түүх.** Бүртгэл, төлвийн өөрчлөлт, засвар бүр цаг хугацаа, шалтгаантайгаа хадгалагдана. Юу ч устгагдахгүй.
-- **Public vs. private data.** The public view shows only ID, category, chemistry and status. Company, serial numbers and other details stay private.
-  **Нийтийн ба нууц мэдээлэл.** Нийтэд зөвхөн ID, ангилал, химийн төрөл, төлөв харагдана. Компани, серийн дугаар зэрэг нь нууц.
+- **Three access levels, as in the EU Battery Regulation.** Public: ID, category, chemistry, status, energy (kWh), carbon footprint, recycled content, registration date. Recyclers and repurposers (approved accounts) and the record's owner also see company, serial numbers and technical details. Administrators see everything.
+  **ЕХ-ны журмын дагуу 3 түвшний хандалт.** Нийтэд: ID, ангилал, химийн төрөл, төлөв, эрчим хүч (kWh), нүүрстөрөгчийн ул мөр, дахин боловсруулсан материалын хувь, бүртгэсэн огноо. Дахин боловсруулагч, дахин ашиглагч (зөвшөөрөгдсөн бүртгэлтэй) болон бүртгэл эзэмшигч нь компани, серийн дугаар, техникийн мэдээллийг харна. Админ бүгдийг харна.
+- **Duplicate protection.** An organization cannot register the same serial number twice.
+  **Давхардлаас хамгаалалт.** Нэг байгууллага ижил серийн дугаарыг хоёр удаа бүртгэх боломжгүй.
+- **Machine-readable data.** `/api/v1/batteries/<ID>` returns the record as JSON, grouped like the Battery Pass data model.
+  **Машинд уншигдах өгөгдөл.** `/api/v1/batteries/<ID>` хаягаар бүртгэлийг JSON хэлбэрээр авна.
 - **Bilingual interface** in Mongolian and English. Times are shown in Ulaanbaatar time.
   **Монгол, англи хоёр хэлтэй.** Цагийг Улаанбаатарын цагаар харуулна.
 - **Installable on phones** as a web app (PWA).
@@ -99,8 +105,8 @@ The tables are created automatically when the portal starts. / Портал ас
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `REGISTRATION_KEY` | Secret key for registration and admin actions |
-| `PORTAL_URL` | Public URL used inside QR codes |
+| `REGISTRATION_KEY` | Admin key (approve organizations, edit records, export all data). Keep it private; organizations sign in with their own email and password. |
+| `PORTAL_URL` | Public URL used inside QR codes. Default `https://passport.mcbis.org`. Keep it permanent: printed QR labels last as long as the batteries. |
 | `LOCAL_TIMEZONE` | Optional, default `Asia/Ulaanbaatar` |
 
 ⚠️ **Never commit real keys to GitHub.** On Render, set them under *Environment* in the service settings.
@@ -134,11 +140,16 @@ Done / Хийгдсэн:
 - [x] Lifecycle status tracking with full history
 - [x] Record corrections with audit trail
 - [x] `SLI` category for car starter batteries
+- [x] Organization accounts with administrator approval
+- [x] Bulk registration from CSV, with QR labels in a ZIP file
+- [x] CSV data export
+- [x] EPR market reports (units and weight per year and category)
+- [x] Three access levels and a JSON API
+- [x] Duplicate serial number protection
+- [x] Permanent QR address on passport.mcbis.org
 
 Next / Дараагийн алхам:
-- [ ] Separate accounts and roles for companies, collection points and MCBI
-- [ ] Duplicate registration warning
-- [ ] CSV / Excel data export
+- [ ] Accounts for collection points
 - [ ] Dashboard: registrations by category and status
 - [ ] EPR fee simulation (scenarios only, no payments)
 - [ ] Pilot report for the Ministry of Environment and Climate Change
