@@ -69,6 +69,20 @@ TEXT = {
         "tab_epr": "EPR report",
         "tab_org": "Organization signup",
         "tab_admin": "Admin",
+        "tab_dash": "Dashboard",
+        "dash_title": "Pilot dashboard",
+        "dash_intro": "Totals for all registered batteries. Only counts are shown here, never company names or serial numbers.",
+        "btn_dash": "Refresh",
+        "dash_total": "Batteries registered",
+        "dash_orgs": "Approved organizations",
+        "dash_energy": "Total energy",
+        "dash_weight": "Total weight",
+        "dash_by_category": "By category",
+        "dash_by_status": "By lifecycle status",
+        "dash_by_chemistry": "By chemistry",
+        "dash_by_month": "Registrations per month (last 12 months)",
+        "dash_empty": "No batteries registered yet.",
+        "dash_updated": "Updated {time} (Ulaanbaatar time)",
         "footer": "Mongolia Circular Battery Initiative · Pilot prototype",
 
         # account bar (sign in once)
@@ -298,6 +312,20 @@ TEXT = {
         "tab_epr": "EPR тайлан",
         "tab_org": "Байгууллага бүртгүүлэх",
         "tab_admin": "Админ",
+        "tab_dash": "Хяналтын самбар",
+        "dash_title": "Туршилтын хяналтын самбар",
+        "dash_intro": "Бүртгэгдсэн бүх батарейн нэгдсэн тоо. Энд зөвхөн тоо харагдана, компанийн нэр, серийн дугаар хэзээ ч харагдахгүй.",
+        "btn_dash": "Шинэчлэх",
+        "dash_total": "Бүртгэгдсэн батарей",
+        "dash_orgs": "Зөвшөөрөгдсөн байгууллага",
+        "dash_energy": "Нийт эрчим хүч",
+        "dash_weight": "Нийт жин",
+        "dash_by_category": "Ангиллаар",
+        "dash_by_status": "Амьдралын мөчлөгийн төлвөөр",
+        "dash_by_chemistry": "Химийн төрлөөр",
+        "dash_by_month": "Сар бүрийн бүртгэл (сүүлийн 12 сар)",
+        "dash_empty": "Одоогоор батарей бүртгэгдээгүй байна.",
+        "dash_updated": "Шинэчилсэн: {time} (Улаанбаатарын цагаар)",
         "footer": "Монголын тойрог батарейн санаачилга · Туршилтын хувилбар",
 
         "signin_hint": "Батарей бүртгэх, EPR тайлан өгөхийн тулд зөвшөөрөгдсөн байгууллагынхаа бүртгэлээр нэвтэрнэ үү.",
@@ -1862,6 +1890,75 @@ def market_summary(admin_key, lang):
 # ACTIONS: LOOKUP AND ADMIN
 # ======================================================================
 
+# ======================================================================
+# DASHBOARD (aggregate counts only; no company names or serial numbers)
+# ======================================================================
+
+def dash_bars(title, rows, label):
+    """A titled list of horizontal bars. rows: [(code, count), ...]"""
+    top = max((n for _c, n in rows), default=0) or 1
+    items = "".join(
+        f'<div class="mcbi-bar"><span class="mcbi-bar-label">{esc(label(code))}</span>'
+        f'<span class="mcbi-bar-track"><span style="width:{max(2, round(100 * n / top))}%">'
+        f'</span></span><span class="mcbi-bar-n">{n}</span></div>'
+        for code, n in rows
+    )
+    return f'<div class="mcbi-dash-box"><h4>{esc(title)}</h4>{items}</div>'
+
+
+def dashboard_html(lang):
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*), COALESCE(SUM(capacity_kwh),0), "
+                        "COALESCE(SUM(weight),0) FROM batteries")
+            total, kwh, kg = cur.fetchone()
+            cur.execute("SELECT COUNT(*) FROM organizations WHERE approved")
+            orgs = cur.fetchone()[0]
+            groups = {}
+            for column in ("category", "status", "chemistry"):
+                cur.execute(f"SELECT {column}, COUNT(*) FROM batteries "
+                            f"GROUP BY {column} ORDER BY COUNT(*) DESC")
+                groups[column] = cur.fetchall()
+            cur.execute("""
+                SELECT to_char(date_trunc('month', registered_at), 'YYYY-MM'),
+                       COUNT(*)
+                FROM batteries
+                WHERE registered_at >= date_trunc('month', CURRENT_DATE)
+                                       - INTERVAL '11 months'
+                GROUP BY 1 ORDER BY 1
+            """)
+            months = cur.fetchall()
+
+    updated = t(lang, "dash_updated",
+                time=datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M"))
+    if not total:
+        return (f'<div class="mcbi-empty"><strong>{t(lang, "dash_empty")}</strong>'
+                f'<br><span>{updated}</span></div>')
+
+    def tile(key, value):
+        return (f'<div class="mcbi-tile"><span>{t(lang, key)}</span>'
+                f'<strong>{value}</strong></div>')
+
+    def known(name_fn):
+        return lambda code: name_fn(lang, code) if code else "—"
+
+    def amount(x):
+        return f"{x:,.1f}".rstrip("0").rstrip(".")
+
+    tiles = (tile("dash_total", f"{total:,}") + tile("dash_orgs", orgs)
+             + tile("dash_energy", f"{amount(kwh)} kWh")
+             + tile("dash_weight", f"{amount(kg)} kg"))
+    boxes = (
+        dash_bars(t(lang, "dash_by_category"), groups["category"], known(category_name))
+        + dash_bars(t(lang, "dash_by_status"), groups["status"], known(status_name))
+        + dash_bars(t(lang, "dash_by_chemistry"), groups["chemistry"], known(chemistry_name))
+        + dash_bars(t(lang, "dash_by_month"), months, lambda m: m)
+    )
+    return (f'<div class="mcbi-tiles">{tiles}</div>'
+            f'<div class="mcbi-dash">{boxes}</div>'
+            f'<p class="mcbi-small">{updated}</p>')
+
+
 def find_battery(battery_id, lang):
     battery_id = (battery_id or "").strip().upper()
 
@@ -2411,6 +2508,23 @@ button.secondary:hover { background: #F4F2EC !important; }
 
 
 CSS += """
+.mcbi-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px; margin-bottom: 14px; }
+.mcbi-tile { background: #FFFFFF; border: 1px solid #E2DED4; border-radius: 14px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.mcbi-tile span { color: #55615F; font-size: 13px; }
+.mcbi-tile strong { color: #0D2253; font-size: 26px; font-variant-numeric: tabular-nums; }
+.mcbi-dash { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px; }
+.mcbi-dash-box { background: #FFFFFF; border: 1px solid #E2DED4; border-radius: 14px;
+  padding: 14px 16px; }
+.mcbi-dash-box h4 { margin: 0 0 10px; font-size: 14px; color: #15201F; }
+.mcbi-bar { display: grid; grid-template-columns: minmax(100px, 48%) 1fr 36px;
+  align-items: center; gap: 8px; font-size: 13px; margin: 7px 0; color: #15201F; }
+.mcbi-bar-label { line-height: 1.3; overflow-wrap: anywhere; }
+.mcbi-bar-track { background: #EEF1F8; border-radius: 6px; height: 10px; overflow: hidden; }
+.mcbi-bar-track span { display: block; height: 100%; background: #2A4079; border-radius: 6px; }
+.mcbi-bar-n { text-align: right; font-variant-numeric: tabular-nums; color: #55615F; }
 .mcbi-account { background: #FFFFFF; border: 1px solid #E2DED4 !important;
   border-radius: 14px !important; padding: 10px 16px !important;
   margin: 4px 0 10px; align-items: end; }
@@ -2506,6 +2620,15 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     inputs=[lookup_id, lookup_link],
                     js=SYNC_URL_JS
                 )
+
+        # ---------- Dashboard (public, counts only) ----------
+        with mk(gr.Tab, {"label": "tab_dash"}, id="dashboard") as dash_tab:
+            mk(gr.HTML, {"value": intro_html("dash_title", "dash_intro")})
+            dash_out = gr.HTML("")
+            dash_button = mk(gr.Button, {"value": "btn_dash"},
+                             variant="secondary", size="sm")
+            dash_button.click(fn=dashboard_html, inputs=lang, outputs=dash_out)
+            dash_tab.select(fn=dashboard_html, inputs=lang, outputs=dash_out)
 
         # ---------- 2. Registration (needs sign-in) ----------
         with mk(gr.Tab, {"label": "tab_register"}, id="register"):
@@ -2972,7 +3095,9 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             level_hint_box, model_id, batch_number, serial_number,
             lookup_card, result_card, account_md
         ],
-    ).then(fn=None, inputs=lang, js=LANG_URL_JS)
+    ).then(fn=None, inputs=lang, js=LANG_URL_JS).then(
+        fn=lambda chosen, html_now: dashboard_html(chosen) if html_now else "",
+        inputs=[lang, dash_out], outputs=dash_out)
 
     demo.load(
         fn=load_battery_from_url,
