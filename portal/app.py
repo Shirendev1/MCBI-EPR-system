@@ -18,12 +18,18 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
+# Gradio would otherwise send anonymous usage statistics to its developers.
+# The portal promises no tracking, so this must be set before gradio loads.
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+
 import gradio as gr
 import psycopg2
 import qrcode
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from legal import LEGAL_VERSION, render_page
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -150,6 +156,9 @@ TEXT = {
         "org_country": "Country",
         "result": "Result",
         "btn_org_submit": "Submit organization request",
+        "org_accept": "I accept the terms of use and the privacy policy on behalf of my organization",
+        "org_legal_links": 'Please read the <a href="/terms?lang=en" target="_blank" rel="noopener">terms of use</a> and the <a href="/privacy?lang=en" target="_blank" rel="noopener">privacy policy</a> before you sign up.',
+        "footer_links": "[Privacy policy](/privacy?lang=en) · [Terms of use](/terms?lang=en) · [Legal notice](/impressum?lang=en)",
 
         # register tab
         "reg_title": "Register a battery",
@@ -264,6 +273,7 @@ TEXT = {
         "err_email": "Please enter a valid email address.",
         "err_password_short": "Password must contain at least 12 characters.",
         "err_org_exists": "An organization with this email is already registered.",
+        "err_accept_terms": "Please accept the terms of use and the privacy policy to sign up.",
         "msg_org_submitted": "Request submitted. You can register batteries after approval by an MCBI administrator.",
         "err_login": "Incorrect organization email or password.",
         "err_not_approved": "Your organization is awaiting administrator approval.",
@@ -388,6 +398,9 @@ TEXT = {
         "org_country": "Улс",
         "result": "Үр дүн",
         "btn_org_submit": "Байгууллага бүртгүүлэх",
+        "org_accept": "Би байгууллагынхаа нэрийн өмнөөс үйлчилгээний нөхцөл болон нууцлалын бодлогыг зөвшөөрч байна",
+        "org_legal_links": 'Бүртгүүлэхийн өмнө <a href="/terms?lang=mn" target="_blank" rel="noopener">үйлчилгээний нөхцөл</a> болон <a href="/privacy?lang=mn" target="_blank" rel="noopener">нууцлалын бодлогыг</a> уншина уу.',
+        "footer_links": "[Нууцлалын бодлого](/privacy?lang=mn) · [Үйлчилгээний нөхцөл](/terms?lang=mn) · [Хууль ёсны мэдээлэл](/impressum?lang=mn)",
 
         "reg_title": "Батарей бүртгэх",
         "reg_intro": "Бүртгэл бүр өвөрмөц ID, QR код, нийтийн холбоос авна. «Сонголтоор» гэснээс бусад бүх талбар заавал.",
@@ -497,6 +510,7 @@ TEXT = {
         "err_email": "Имэйл хаягаа шалгана уу.",
         "err_password_short": "Нууц үг хамгийн багадаа 12 тэмдэгттэй байна.",
         "err_org_exists": "Энэ имэйлээр байгууллага бүртгэлтэй байна.",
+        "err_accept_terms": "Бүртгүүлэхийн тулд үйлчилгээний нөхцөл болон нууцлалын бодлогыг зөвшөөрнө үү.",
         "msg_org_submitted": "Хүсэлт илгээгдлээ. MCBI админ зөвшөөрсний дараа батарей бүртгэх боломжтой.",
         "err_login": "Байгууллагын имэйл эсвэл нууц үг буруу.",
         "err_not_approved": "Байгууллагын бүртгэлийг админ хараахан зөвшөөрөөгүй байна.",
@@ -1102,6 +1116,8 @@ def init_database():
                     "ALTER TABLE battery_events ADD COLUMN IF NOT EXISTS reason TEXT",
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS kind TEXT",
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS country TEXT",
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ",
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS terms_version TEXT",
                     "CREATE INDEX IF NOT EXISTS batteries_org_idx ON batteries (organization_id)",
                 ):
                     cur.execute(statement)
@@ -1455,7 +1471,7 @@ def md_table(headers, rows):
 # ACTIONS: ORGANIZATIONS AND SIGN-IN
 # ======================================================================
 
-def create_organization(name, email, password, kind, country, lang):
+def create_organization(name, email, password, kind, country, accepted, lang):
     name = required_text(name, t(lang, "org_name"), lang)
     email = required_text(email, t(lang, "org_email"), lang).lower()
     country = required_text(country, t(lang, "org_country"), lang)
@@ -1465,6 +1481,8 @@ def create_organization(name, email, password, kind, country, lang):
         raise gr.Error(t(lang, "err_email"))
     if len(password or "") < 12:
         raise gr.Error(t(lang, "err_password_short"))
+    if not accepted:
+        raise gr.Error(t(lang, "err_accept_terms"))
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn:
             with conn.cursor() as cur:
@@ -1472,8 +1490,11 @@ def create_organization(name, email, password, kind, country, lang):
                 if cur.fetchone():
                     raise gr.Error(t(lang, "err_org_exists"))
                 cur.execute(
-                    "INSERT INTO organizations (name,email,password_hash,kind,country) VALUES (%s,%s,%s,%s,%s)",
-                    (name[:200], email, hash_password(password), kind, country[:100])
+                    "INSERT INTO organizations (name,email,password_hash,kind,country,"
+                    "terms_accepted_at,terms_version) "
+                    "VALUES (%s,%s,%s,%s,%s,CURRENT_TIMESTAMP,%s)",
+                    (name[:200], email, hash_password(password), kind,
+                     country[:100], LEGAL_VERSION)
                 )
     return t(lang, "msg_org_submitted")
 
@@ -2260,6 +2281,35 @@ def healthz():
     return {"status": "ok"}
 
 
+def legal_lang(request):
+    asked = (request.query_params.get("lang") or "").lower()
+    if asked in ("en", "mn"):
+        return asked
+    accept = (request.headers.get("accept-language") or "").lower()
+    return "mn" if accept.startswith("mn") else "en"
+
+
+def legal_response(page, request):
+    return HTMLResponse(render_page(page, legal_lang(request)),
+                        headers={"Cache-Control": "public, max-age=300"})
+
+
+#   /privacy  /terms  /impressum   legal pages (?lang=en or ?lang=mn)
+@api.get("/privacy", response_class=HTMLResponse)
+def privacy_page(request: Request):
+    return legal_response("privacy", request)
+
+
+@api.get("/terms", response_class=HTMLResponse)
+def terms_page(request: Request):
+    return legal_response("terms", request)
+
+
+@api.get("/impressum", response_class=HTMLResponse)
+def impressum_page(request: Request):
+    return legal_response("impressum", request)
+
+
 @api.get("/b/{battery_id}")
 def resolve_battery(battery_id: str, request: Request):
     """Browsers get the portal page, machines asking for JSON get the data."""
@@ -2338,8 +2388,8 @@ THEME = gr.themes.Base(
     primary_hue=NAVY,
     neutral_hue=gr.themes.colors.stone,
     radius_size=gr.themes.sizes.radius_md,
-    font=[gr.themes.GoogleFont("IBM Plex Sans"), "system-ui", "sans-serif"],
-    font_mono=[gr.themes.GoogleFont("IBM Plex Mono"), "monospace"],
+    font=["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
+    font_mono=["ui-monospace", "SFMono-Regular", "Consolas", "monospace"],
 ).set(
     body_background_fill="#F4F2EC",
     body_text_color="#15201F",
@@ -2411,7 +2461,8 @@ def edit_header_html(lang):
 
 
 def footer_md(lang):
-    return f"---\n**MCBI EPR Pilot — N-064** · {t(lang, 'footer')}"
+    return (f"---\n**MCBI EPR Pilot — N-064** · {t(lang, 'footer')}\n\n"
+            f"{t(lang, 'footer_links')}")
 
 
 CSS = """
@@ -2900,6 +2951,11 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     value=None
                 )
                 org_country_input = mk(gr.Textbox, {"label": "org_country"})
+            mk(gr.HTML, {"value": lambda lang: (
+                f'<p class="mcbi-small">{t(lang, "org_legal_links")}</p>')})
+            org_accept_input = mk(
+                gr.Checkbox, {"label": "org_accept"}, value=False
+            )
             org_signup_result = mk(
                 gr.Textbox, {"label": "result"}, interactive=False
             )
@@ -2908,7 +2964,8 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             org_submit.click(
                 fn=create_organization,
                 inputs=[org_name_input, org_email_input, org_password_input,
-                        org_kind_input, org_country_input, lang],
+                        org_kind_input, org_country_input, org_accept_input,
+                        lang],
                 outputs=org_signup_result
             )
 
