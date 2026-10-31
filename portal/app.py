@@ -88,7 +88,7 @@ TEXT = {
         "dash_by_chemistry": "By chemistry",
         "dash_by_month": "Registrations per month (last 12 months)",
         "dash_empty": "No batteries registered yet.",
-        "dash_updated": "Updated {time} (Ulaanbaatar time)",
+        "dash_updated": "Updated {time} ({tz} time)",
         "footer": "Mongolia Circular Battery Initiative · Pilot prototype",
 
         # account bar (sign in once)
@@ -243,6 +243,7 @@ TEXT = {
         "admin_key": "Admin key",
         "recent_regs": "Recent registrations",
         "btn_show_regs": "Show registrations",
+        "btn_admin_lock": "Lock admin (clear key)",
         "btn_export_all": "Export all batteries (CSV)",
         "btn_market": "Market summary (EPR)",
         "market_summary": "Market summary",
@@ -335,7 +336,7 @@ TEXT = {
         "dash_by_chemistry": "Химийн төрлөөр",
         "dash_by_month": "Сар бүрийн бүртгэл (сүүлийн 12 сар)",
         "dash_empty": "Одоогоор батарей бүртгэгдээгүй байна.",
-        "dash_updated": "Шинэчилсэн: {time} (Улаанбаатарын цагаар)",
+        "dash_updated": "Шинэчилсэн: {time} ({tz} цагаар)",
         "footer": "Монголын тойрог батарейн санаачилга · Туршилтын хувилбар",
 
         "signin_hint": "Батарей бүртгэх, EPR тайлан өгөхийн тулд зөвшөөрөгдсөн байгууллагынхаа бүртгэлээр нэвтэрнэ үү.",
@@ -481,6 +482,7 @@ TEXT = {
         "admin_key": "Админ түлхүүр",
         "recent_regs": "Сүүлийн бүртгэлүүд",
         "btn_show_regs": "Бүртгэлүүдийг харах",
+        "btn_admin_lock": "Админаас гарах (түлхүүр арилгах)",
         "btn_export_all": "Бүх батарейг CSV-ээр татах",
         "btn_market": "Зах зээлийн нэгтгэл (EPR)",
         "market_summary": "Зах зээлийн нэгтгэл",
@@ -735,7 +737,7 @@ def detect_lang(request):
 
 
 def local_time(value):
-    """Show a stored timestamp in local (Ulaanbaatar) time."""
+    """Show a stored timestamp in local time (LOCAL_TIMEZONE)."""
     if value is None:
         return "—"
     if value.tzinfo is None:
@@ -788,7 +790,9 @@ def check_admin(key):
     """Raises AuthError unless the admin key is right (and not locked out)."""
     if login_locked("__admin__"):
         raise AuthError("locked")
-    expected = os.getenv("REGISTRATION_KEY")
+    # ADMIN_KEY is the admin's own key. REGISTRATION_KEY is still accepted
+    # only when ADMIN_KEY is not set, so older setups keep working.
+    expected = os.getenv("ADMIN_KEY") or os.getenv("REGISTRATION_KEY")
     if not expected or not hmac.compare_digest((key or "").encode("utf-8"), expected.encode("utf-8")):
         FAILED_LOGINS["__admin__"].append(time.time())
         raise AuthError("admin")
@@ -1951,7 +1955,8 @@ def dashboard_html(lang):
             months = cur.fetchall()
 
     updated = t(lang, "dash_updated",
-                time=datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M"))
+                time=datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M"),
+                tz=LOCAL_TZ.key)
     if not total:
         return (f'<div class="mcbi-empty"><strong>{t(lang, "dash_empty")}</strong>'
                 f'<br><span>{updated}</span></div>')
@@ -1964,7 +1969,7 @@ def dashboard_html(lang):
         return lambda code: name_fn(lang, code) if code else "—"
 
     def amount(x):
-        return f"{x:,.1f}".rstrip("0").rstrip(".")
+        return f"{x:,.2f}".rstrip("0").rstrip(".")
 
     tiles = (tile("dash_total", f"{total:,}") + tile("dash_orgs", orgs)
              + tile("dash_energy", f"{amount(kwh)} kWh")
@@ -2643,7 +2648,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
     with gr.Tabs():
 
         # ---------- 1. Public lookup (default tab; QR links open here) ----------
-        with mk(gr.Tab, {"label": "tab_find"}, id="find"):
+        with mk(gr.Tab, {"label": "tab_find"}, id="find") as find_tab:
             mk(gr.HTML, {"value": intro_html("find_title", "find_intro")})
             with gr.Row(equal_height=True):
                 lookup_id = mk(
@@ -2682,7 +2687,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             dash_tab.select(fn=dashboard_html, inputs=lang, outputs=dash_out)
 
         # ---------- 2. Registration (needs sign-in) ----------
-        with mk(gr.Tab, {"label": "tab_register"}, id="register"):
+        with mk(gr.Tab, {"label": "tab_register"}, id="register") as register_tab:
             mk(gr.HTML, {"value": intro_html("reg_title", "reg_intro")})
 
             with gr.Column(elem_classes="mcbi-card"):
@@ -2888,7 +2893,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 )
 
         # ---------- 3. EPR market report (needs sign-in) ----------
-        with mk(gr.Tab, {"label": "tab_epr"}, id="epr"):
+        with mk(gr.Tab, {"label": "tab_epr"}, id="epr") as epr_tab:
             mk(gr.HTML, {"value": intro_html("epr_title", "epr_intro")})
             with gr.Column(elem_classes="mcbi-card"):
                 with gr.Row():
@@ -2937,7 +2942,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             )
 
         # ---------- Organization onboarding ----------
-        with mk(gr.Tab, {"label": "tab_org"}, id="organization"):
+        with mk(gr.Tab, {"label": "tab_org"}, id="organization") as org_tab:
             mk(gr.HTML, {"value": intro_html("org_title", "org_intro")})
             org_name_input = mk(gr.Textbox, {"label": "org_name"})
             org_email_input = mk(gr.Textbox, {"label": "org_email"})
@@ -2975,6 +2980,10 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             with gr.Column(elem_classes="mcbi-card"):
                 admin_key = mk(
                     gr.Textbox, {"label": "admin_key"}, type="password"
+                )
+                admin_lock_button = mk(
+                    gr.Button, {"value": "btn_admin_lock"},
+                    variant="secondary", size="sm"
                 )
 
                 recent_records = mk(
@@ -3105,6 +3114,27 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     outputs=edit_result
                 )
 
+            # The admin key and everything it revealed are wiped when the
+            # admin locks the page, signs out, or switches to another tab,
+            # so nothing stays on screen on a shared computer.
+            admin_wipe = [
+                admin_key, recent_records, export_all_file,
+                organizations_result, approve_org_id, approve_org_result,
+                market_table, admin_id, admin_result, history_result,
+                new_status, status_reason, status_result,
+                edit_field, edit_value, edit_reason, edit_result,
+            ]
+
+            def wipe_admin():
+                return ("", "", None, "", None, "", "", "", "", "",
+                        None, "", "", None, "", "", "")
+
+            admin_lock_button.click(fn=wipe_admin, inputs=[],
+                                    outputs=admin_wipe)
+            for other_tab in (find_tab, dash_tab, register_tab, epr_tab,
+                              org_tab):
+                other_tab.select(fn=wipe_admin, inputs=[], outputs=admin_wipe)
+
     mk(gr.Markdown, {"value": footer_md}, elem_id="mcbi-footer")
 
     # ---------- Signing in and out ----------
@@ -3120,7 +3150,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
         fn=sign_out,
         inputs=lang,
         outputs=[session, login_box, account_bar, account_md]
-    )
+    ).then(fn=wipe_admin, inputs=[], outputs=admin_wipe)
 
     # ---------- Changing the language ----------
     # Besides the components registered with mk(), a few things depend on
