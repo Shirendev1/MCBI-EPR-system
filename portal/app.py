@@ -2447,6 +2447,58 @@ def intro_html(title_key, text_key):
     return build
 
 
+# ---------- "How it works" guide shown at the top for first-time visitors ----------
+GUIDE = {
+    "en": {
+        "title": "New here? How the portal works",
+        "steps": [
+            ("Look up a battery",
+             "Anyone can use the <b>Find</b> tab: type a Battery ID or scan its QR code. No account needed."),
+            ("Sign up your organization",
+             "Battery importers and sellers open the <b>Organization signup</b> tab and fill in the form. "
+             "MCBI checks and approves it."),
+            ("Sign in",
+             "After approval, sign in at the top of this page with your email and password."),
+            ("Register batteries",
+             "Open the <b>Register</b> tab. Add batteries one by one, or upload a file with many at once. "
+             "Each battery gets an ID and a QR code."),
+            ("Send your yearly report",
+             "In the <b>EPR report</b> tab, enter how many batteries you placed on the market each year."),
+        ],
+        "note": "This is a voluntary pilot. Data is used for testing only.",
+    },
+    "mn": {
+        "title": "Анх удаа орж байна уу? Портал хэрхэн ажилладаг вэ",
+        "steps": [
+            ("Батарей хайх",
+             "<b>Хайх</b> хэсгийг хэн ч ашиглаж болно: батарейн ID-г бичих эсвэл QR кодыг уншуулна. Бүртгэл шаардлагагүй."),
+            ("Байгууллагаа бүртгүүлэх",
+             "Батарей импортлогч, худалдагч <b>Байгууллага бүртгүүлэх</b> хэсэгт маягтаа бөглөнө. "
+             "MCBI шалгаад зөвшөөрнө."),
+            ("Нэвтрэх",
+             "Зөвшөөрөгдсөний дараа энэ хуудасны дээд хэсэгт имэйл, нууц үгээрээ нэвтэрнэ."),
+            ("Батарей бүртгэх",
+             "<b>Бүртгэх</b> хэсэгт батарейгаа нэг нэгээр нь эсвэл файлаар олноор нь нэмнэ. "
+             "Батарей бүр ID болон QR код авна."),
+            ("Жилийн тайлан илгээх",
+             "<b>EPR тайлан</b> хэсэгт жил бүр зах зээлд хэдэн батарей нийлүүлснээ оруулна."),
+        ],
+        "note": "Энэ бол сайн дурын туршилт. Өгөгдлийг зөвхөн туршилтад ашиглана.",
+    },
+}
+
+
+def guide_html(lang):
+    g = GUIDE.get(lang, GUIDE["en"])
+    items = "".join(
+        f'<li><span class="mcbi-guide-num">{i}</span>'
+        f'<div><b>{title}</b><br><span>{text}</span></div></li>'
+        for i, (title, text) in enumerate(g["steps"], 1)
+    )
+    return (f'<details class="mcbi-guide" open><summary>{g["title"]}</summary>'
+            f'<ol>{items}</ol><p class="mcbi-guide-note">{g["note"]}</p></details>')
+
+
 def step_html(number, key):
     def build(lang):
         return (f'<h3 class="mcbi-step-title"><span>{number}</span>'
@@ -2486,6 +2538,16 @@ CSS = """
 .mcbi-sub { font-size: 13px; color: #55615F; }
 .mcbi-badge { font-size: 12px; font-weight: 600; letter-spacing: .08em;
   color: #8A5300; background: #FBF0DC; padding: 6px 10px; border-radius: 999px; }
+.mcbi-guide { background: #F4F8FB; border: 1px solid #D6E2EC; border-radius: 12px;
+  padding: 12px 16px; margin: 6px 0 10px; }
+.mcbi-guide summary { cursor: pointer; font-weight: 700; font-size: 16px; color: #0D2253; }
+.mcbi-guide ol { list-style: none; padding: 0; margin: 12px 0 4px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.mcbi-guide li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px;
+  color: #33403E; }
+.mcbi-guide-num { flex: 0 0 26px; height: 26px; border-radius: 50%; background: #0D2253;
+  color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.mcbi-guide-note { font-size: 12px; color: #55615F; margin: 8px 0 0; }
 .mcbi-intro h2 { margin: 8px 0 4px; font-size: 26px; color: #15201F; }
 .mcbi-intro p { margin: 0 0 4px; color: #55615F; }
 .mcbi-card { background: #FFFFFF; border: 1px solid #E2DED4 !important;
@@ -2630,6 +2692,8 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             list(LANGUAGES), value=L0, show_label=False, container=False,
             elem_id="mcbi-lang", scale=0, min_width=200
         )
+
+    mk(gr.HTML, {"value": guide_html})
 
     # ---------- Sign in once; every tab below uses it ----------
     with gr.Column(elem_classes="mcbi-account") as login_box:
