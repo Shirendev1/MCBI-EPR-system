@@ -2471,8 +2471,8 @@ def footer_md(lang):
 
 
 CSS = """
-.gradio-container { max-width: 1040px !important; width: 100% !important;
-  margin: 0 auto !important; box-sizing: border-box; }
+.gradio-container { max-width: 100% !important; width: 100% !important;
+  margin: 0  !important; box-sizing: border-box; }
 @media (max-width: 640px) {
   .gradio-container .main { width: 100% !important; box-sizing: border-box;
     padding-left: 12px !important; padding-right: 12px !important; }
