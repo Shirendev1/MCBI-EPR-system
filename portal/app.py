@@ -47,6 +47,15 @@ LEVELS = ("SKU", "Batch", "Unit")
 CAPACITY_UNITS = ("Wh", "Ah")
 STATUSES = ("original", "repurposed", "re-used", "remanufactured", "waste")
 ORG_KINDS = ("manufacturer", "importer", "recycler", "repurposer", "other")
+# Economic operator identifier schemes (EN 18219 asks for unique operator
+# identifiers next to product identifiers). The value is checked by format
+# only; it is not looked up in the issuing register.
+OPERATOR_ID_SCHEMES = {
+    "EORI": r"[A-Z]{2}[A-Z0-9]{1,15}",
+    "VAT": r"[A-Z]{2}[A-Z0-9]{2,13}",
+    "LEI": r"[A-Z0-9]{18}[0-9]{2}",
+    "national": r"[A-Z0-9][A-Z0-9./-]{1,49}",
+}
 # Organization types treated as "persons with a legitimate interest"
 INTEREST_KINDS = ("recycler", "repurposer")
 MAX_CSV_ROWS = 500
@@ -154,6 +163,11 @@ TEXT = {
         "org_password_new": "Password (12+ characters)",
         "org_kind": "Organization type",
         "org_country": "Country",
+        "org_id_scheme": "Company identifier type (optional)",
+        "org_id_value": "Company identifier",
+        "org_id_info": "EORI, EU VAT number, LEI or national company register number. It identifies your organization in battery passports.",
+        "err_operator_id": "The company identifier does not match the {scheme} format. Use capital letters and digits only, without spaces.",
+        "err_org_id_missing": "Enter the company identifier or clear the identifier type.",
         "result": "Result",
         "btn_org_submit": "Submit organization request",
         "org_accept": "I accept the terms of use and the privacy policy on behalf of my organization",
@@ -397,6 +411,11 @@ TEXT = {
         "org_password_new": "Нууц үг (12+ тэмдэгт)",
         "org_kind": "Байгууллагын төрөл",
         "org_country": "Улс",
+        "org_id_scheme": "Компанийн дугаарын төрөл (сонголтоор)",
+        "org_id_value": "Компанийн дугаар",
+        "org_id_info": "EORI, ЕХ-ны НӨАТ-ын дугаар, LEI эсвэл улсын бүртгэлийн дугаар. Батарейн паспортад таны байгууллагыг энэ дугаараар таних болно.",
+        "err_operator_id": "Компанийн дугаар {scheme} хэлбэрт тохирохгүй байна. Зай авалгүй, зөвхөн том үсэг, тоо ашиглана уу.",
+        "err_org_id_missing": "Компанийн дугаараа оруулах эсвэл дугаарын төрлийг арилгана уу.",
         "result": "Үр дүн",
         "btn_org_submit": "Байгууллага бүртгүүлэх",
         "org_accept": "Би байгууллагынхаа нэрийн өмнөөс үйлчилгээний нөхцөл болон нууцлалын бодлогыг зөвшөөрч байна",
@@ -1122,6 +1141,8 @@ def init_database():
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS country TEXT",
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ",
                     "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS terms_version TEXT",
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS operator_id_scheme TEXT",
+                    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS operator_id TEXT",
                     "CREATE INDEX IF NOT EXISTS batteries_org_idx ON batteries (organization_id)",
                 ):
                     cur.execute(statement)
@@ -1200,8 +1221,45 @@ def json_link(battery_id):
     return f"{PORTAL_URL}/api/v1/batteries/{quote(battery_id, safe='')}"
 
 
-def make_qr(battery_id):
-    return qrcode.make(record_link(battery_id), border=2).convert("RGB")
+# Data carrier (QR). Aligned with EN 18220 / ISO/IEC 18004 basics:
+# a 4-module quiet zone (the QR minimum), error correction level Q (about
+# 25 % of the code can be damaged or dirty and it still reads), and a
+# human-readable ID printed next to the code on the label.
+QR_ERROR_CORRECTION = qrcode.constants.ERROR_CORRECT_Q
+QR_QUIET_ZONE = 4
+
+
+def make_qr(battery_id, box_size=10):
+    code = qrcode.QRCode(error_correction=QR_ERROR_CORRECTION,
+                         box_size=box_size, border=QR_QUIET_ZONE)
+    code.add_data(record_link(battery_id))
+    code.make(fit=True)
+    return code.make_image(fill_color="black", back_color="white").convert("RGB")
+
+
+def make_label(battery_id):
+    """Printable label: QR code, the ID in plain text, and a passport marker,
+    so the battery can still be identified if the code cannot be scanned."""
+    from PIL import Image, ImageDraw, ImageFont
+    qr = make_qr(battery_id, box_size=12)
+    width = qr.width
+    try:
+        id_font = ImageFont.load_default(size=max(18, width // 18))
+        mark_font = ImageFont.load_default(size=max(14, width // 26))
+    except TypeError:  # very old Pillow
+        id_font = mark_font = ImageFont.load_default()
+    pad = width // 24
+    text_h = id_font.size + mark_font.size + 3 * pad if hasattr(id_font, "size") else 60
+    label = Image.new("RGB", (width, qr.height + text_h), "white")
+    label.paste(qr, (0, 0))
+    draw = ImageDraw.Draw(label)
+    y = qr.height - pad
+    draw.text((width // 2, y), battery_id, fill="black", font=id_font, anchor="mt")
+    y += (id_font.size if hasattr(id_font, "size") else 20) + pad
+    draw.text((width // 2, y), "DPP · BATTERY PASSPORT · " + PORTAL_URL.split("//")[-1],
+              fill="black", font=mark_font, anchor="mt")
+    draw.rectangle((0, 0, width - 1, label.height - 1), outline="black", width=2)
+    return label
 
 
 def image_data_uri(image):
@@ -1278,7 +1336,7 @@ def json_name(column):
     return JSON_NAMES.get(column, column)
 
 
-def battery_json(b, level, history=None):
+def battery_json(b, level, history=None, operator=None):
     """The record as JSON, limited to what the access level may see."""
     rank = LEVEL_RANK[level]
     data = dict(b)
@@ -1292,7 +1350,21 @@ def battery_json(b, level, history=None):
             for column in columns
             if LEVEL_RANK[FIELD_ACCESS[column]] <= rank
         }
+    identifiers = {
+        "product": {
+            "id": b["id"],
+            "uri": record_link(b["id"]),
+            "granularity": {"SKU": "model", "Batch": "batch", "Unit": "item"}.get(
+                b["granularity"], b["granularity"]),
+            "issuingSystem": "self-issued (MCBI passport registry, " + PORTAL_URL + ")",
+        },
+    }
+    if rank >= LEVEL_RANK["interest"] and operator and operator.get("id"):
+        identifiers["economicOperator"] = {
+            "scheme": operator["scheme"], "id": operator["id"],
+        }
     result = {
+        "identifiers": identifiers,
         "schema": "MCBI battery record v0.1 (field groups follow the Battery Pass data model categories; access classification is provisional)",
         "accessLevel": level,
         **groups,
@@ -1475,7 +1547,22 @@ def md_table(headers, rows):
 # ACTIONS: ORGANIZATIONS AND SIGN-IN
 # ======================================================================
 
-def create_organization(name, email, password, kind, country, accepted, lang):
+def clean_operator_id(scheme, value, lang):
+    """(scheme, value) normalized, or (None, None) when left empty."""
+    value = re.sub(r"\s+", "", value or "").upper()
+    if not scheme:
+        return None, None
+    if scheme not in OPERATOR_ID_SCHEMES:
+        raise gr.Error(t(lang, "err_operator_id", scheme=scheme))
+    if not value:
+        raise gr.Error(t(lang, "err_org_id_missing"))
+    if not re.fullmatch(OPERATOR_ID_SCHEMES[scheme], value):
+        raise gr.Error(t(lang, "err_operator_id", scheme=scheme))
+    return scheme, value
+
+
+def create_organization(name, email, password, kind, country, id_scheme,
+                        id_value, accepted, lang):
     name = required_text(name, t(lang, "org_name"), lang)
     email = required_text(email, t(lang, "org_email"), lang).lower()
     country = required_text(country, t(lang, "org_country"), lang)
@@ -1485,6 +1572,7 @@ def create_organization(name, email, password, kind, country, accepted, lang):
         raise gr.Error(t(lang, "err_email"))
     if len(password or "") < 12:
         raise gr.Error(t(lang, "err_password_short"))
+    id_scheme, id_value = clean_operator_id(id_scheme, id_value, lang)
     if not accepted:
         raise gr.Error(t(lang, "err_accept_terms"))
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
@@ -1495,10 +1583,10 @@ def create_organization(name, email, password, kind, country, accepted, lang):
                     raise gr.Error(t(lang, "err_org_exists"))
                 cur.execute(
                     "INSERT INTO organizations (name,email,password_hash,kind,country,"
-                    "terms_accepted_at,terms_version) "
-                    "VALUES (%s,%s,%s,%s,%s,CURRENT_TIMESTAMP,%s)",
+                    "operator_id_scheme,operator_id,terms_accepted_at,terms_version) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP,%s)",
                     (name[:200], email, hash_password(password), kind,
-                     country[:100], LEGAL_VERSION)
+                     country[:100], id_scheme, id_value, LEGAL_VERSION)
                 )
     return t(lang, "msg_org_submitted")
 
@@ -1531,14 +1619,15 @@ def list_organizations(admin_key, lang):
     require_admin_key(admin_key, lang)
     with closing(psycopg2.connect(DATABASE_URL)) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id,name,email,approved,kind,country FROM organizations ORDER BY id DESC LIMIT 100")
+            cur.execute("SELECT id,name,email,approved,kind,country,operator_id_scheme,operator_id FROM organizations ORDER BY id DESC LIMIT 100")
             rows = cur.fetchall()
     approved_word = t(lang, "org_approved_word")
     pending_word = t(lang, "org_pending_word")
     return "\n".join(
         f"ID {i} | {name} | {email} | {kind_name(lang, kind) if kind else '—'} | "
-        f"{country or '—'} | {approved_word if approved else pending_word}"
-        for i, name, email, approved, kind, country in rows
+        f"{country or '—'} | {f'{scheme} {op_id}' if op_id else '—'} | "
+        f"{approved_word if approved else pending_word}"
+        for i, name, email, approved, kind, country, scheme, op_id in rows
     ) or t(lang, "msg_no_orgs")
 
 
@@ -1600,7 +1689,7 @@ def register_battery(
         private_card(values, qr, lang),
         battery_id,
         record_link(battery_id),
-        gr.update(value=save_qr_file(battery_id, qr)),
+        gr.update(value=save_qr_file(battery_id, make_label(battery_id))),
         values,  # kept so the card can be redrawn if the language changes
     )
 
@@ -1778,7 +1867,7 @@ def bulk_register(session, file_path, lang):
         archive.writestr("registered.csv", "﻿" + table.getvalue())
         for _number, battery_id, _c in created:
             image = io.BytesIO()
-            make_qr(battery_id).save(image, format="PNG")
+            make_label(battery_id).save(image, format="PNG")
             archive.writestr(f"qr/{battery_id}.png", image.getvalue())
     return t(lang, "msg_csv_done", n=len(created)), path
 
@@ -2340,6 +2429,13 @@ def api_battery(battery_id: str, request: Request):
         with conn.cursor() as cur:
             b = fetch_battery(cur, battery_id)
             history = None
+            operator = None
+            if b is not None and b["organization_id"] is not None:
+                cur.execute("SELECT operator_id_scheme, operator_id FROM organizations WHERE id=%s",
+                            (b["organization_id"],))
+                row = cur.fetchone()
+                if row:
+                    operator = {"scheme": row[0], "id": row[1]}
             if b is not None:
                 history = [
                     {"time": when.astimezone(timezone.utc).isoformat(),
@@ -2375,7 +2471,7 @@ def api_battery(battery_id: str, request: Request):
         }[error.code])
 
     headers = {"Cache-Control": "public, max-age=60" if level == "public" else "no-store"}
-    return JSONResponse(battery_json(b, level, history), headers=headers)
+    return JSONResponse(battery_json(b, level, history, operator), headers=headers)
 
 
 init_database()
@@ -3020,6 +3116,13 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                     value=None
                 )
                 org_country_input = mk(gr.Textbox, {"label": "org_country"})
+            with gr.Row():
+                org_id_scheme_input = gr.Dropdown(
+                    choices=[("—", "")] + [(x, x) for x in OPERATOR_ID_SCHEMES],
+                    value="", label=t(L0, "org_id_scheme"))
+                TRANSLATABLE.append((org_id_scheme_input, {"label": "org_id_scheme"}))
+                org_id_value_input = mk(
+                    gr.Textbox, {"label": "org_id_value", "info": "org_id_info"})
             mk(gr.HTML, {"value": lambda lang: (
                 f'<p class="mcbi-small">{t(lang, "org_legal_links")}</p>')})
             org_accept_input = mk(
@@ -3033,8 +3136,9 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             org_submit.click(
                 fn=create_organization,
                 inputs=[org_name_input, org_email_input, org_password_input,
-                        org_kind_input, org_country_input, org_accept_input,
-                        lang],
+                        org_kind_input, org_country_input,
+                        org_id_scheme_input, org_id_value_input,
+                        org_accept_input, lang],
                 outputs=org_signup_result
             )
 
