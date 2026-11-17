@@ -23,7 +23,7 @@ LEGAL_VERSION. New organizations store the version they accepted.
 import html
 import os
 
-LEGAL_VERSION = "2026-10-29"
+LEGAL_VERSION = "2026-11-17"
 
 REQUIRED = ("LEGAL_COMPANY_ADDRESS", "LEGAL_COMPANY_REG_NO",
             "LEGAL_CONTACT_EMAIL", "LEGAL_HOSTING_REGION")
@@ -154,8 +154,13 @@ are listed on its <a href="https://render.com/trust">trust page</a>.</p>
 <p>The domain name system (DNS) of mcbis.org is managed by Hostinger. DNS only
 directs browsers to the server; Hostinger does not receive the content of
 the portal.</p>
-<p>We do not sell personal data and do not pass it to anyone else, unless we
-are legally required to.</p>
+<p><strong>Second-life requests.</strong> When your organization sends a
+request for a battery offered in the "Second life" tab, the organization
+that offered it sees your organization name, type, country, email address and
+your message, so that it can contact you. This happens only when you send a
+request. Sellers' names are not shown to buyers.</p>
+<p>Apart from this, we do not sell personal data and do not pass it to anyone
+else, unless we are legally required to.</p>
 
 <h2>6. How long we keep data</h2>
 <ul>
@@ -354,8 +359,13 @@ Data Privacy Framework-д, түүнийг ашиглах боломжгүй үе
 жагсаалт түүний <a href="https://render.com/trust">trust хуудсанд</a> бий.</p>
 <p>mcbis.org домэйны DNS-ийг Hostinger удирддаг. DNS нь зөвхөн хөтчийг сервер
 рүү чиглүүлдэг бөгөөд Hostinger порталын агуулгыг хүлээн авдаггүй.</p>
-<p>Бид хувийн мэдээллийг худалддаггүй бөгөөд хуулиар шаардсанаас бусад
-тохиолдолд өөр хэнд ч дамжуулдаггүй.</p>
+<p><strong>Хоёр дахь амьдралын хүсэлт.</strong> Танай байгууллага
+"Хоёр дахь амьдрал" хэсэгт санал болгосон батарейд хүсэлт илгээхэд уг
+батарейг санал болгосон байгууллага танай байгууллагын нэр, төрөл, улс,
+имэйл хаяг болон таны зурвасыг харж, тантай холбогдоно. Энэ нь зөвхөн та
+хүсэлт илгээсэн үед л болно. Худалдагчийн нэр худалдан авагчид харагдахгүй.</p>
+<p>Үүнээс бусад тохиолдолд бид хувийн мэдээллийг худалддаггүй бөгөөд хуулиар
+шаардсанаас бусад тохиолдолд өөр хэнд ч дамжуулдаггүй.</p>
 
 <h2>6. Мэдээллийг хэр удаан хадгалах вэ</h2>
 <ul>
