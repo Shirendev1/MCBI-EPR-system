@@ -678,6 +678,9 @@ EVENT_KEYS = {
     "registered": "ev_registered",
     "status_changed": "ev_status_changed",
     "edited": "ev_edited",
+    "soh_tested": "ev_soh_tested",
+    "offered_second_life": "ev_offered",
+    "offer_withdrawn": "ev_withdrawn",
 }
 
 
@@ -1146,6 +1149,32 @@ def init_database():
                     "CREATE INDEX IF NOT EXISTS batteries_org_idx ON batteries (organization_id)",
                 ):
                     cur.execute(statement)
+                # Second-life marketplace: a battery owner offers a tested
+                # battery; other approved organizations can ask for it.
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS second_life_offers (
+                        battery_id TEXT PRIMARY KEY REFERENCES batteries(id),
+                        organization_id BIGINT NOT NULL REFERENCES organizations(id),
+                        soh_pct DOUBLE PRECISION NOT NULL,
+                        test_method TEXT NOT NULL,
+                        tested_on TEXT NOT NULL,
+                        price_note TEXT,
+                        note TEXT,
+                        active BOOLEAN NOT NULL DEFAULT TRUE,
+                        listed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS second_life_interest (
+                        id BIGSERIAL PRIMARY KEY,
+                        battery_id TEXT NOT NULL REFERENCES batteries(id),
+                        buyer_org_id BIGINT NOT NULL REFERENCES organizations(id),
+                        message TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (battery_id, buyer_org_id)
+                    )
+                """)
                 # Older records stored in Wh get their kWh value filled in
                 cur.execute("""
                     UPDATE batteries SET capacity_kwh = capacity / 1000.0
@@ -2028,6 +2057,8 @@ def dashboard_html(lang):
             total, kwh, kg = cur.fetchone()
             cur.execute("SELECT COUNT(*) FROM organizations WHERE approved")
             orgs = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM second_life_offers WHERE active")
+            offers = cur.fetchone()[0]
             groups = {}
             for column in ("category", "status", "chemistry"):
                 cur.execute(f"SELECT {column}, COUNT(*) FROM batteries "
@@ -2062,7 +2093,8 @@ def dashboard_html(lang):
 
     tiles = (tile("dash_total", f"{total:,}") + tile("dash_orgs", orgs)
              + tile("dash_energy", f"{amount(kwh)} kWh")
-             + tile("dash_weight", f"{amount(kg)} kg"))
+             + tile("dash_weight", f"{amount(kg)} kg")
+             + tile("dash_offers", f"{offers:,}"))
     boxes = (
         dash_bars(t(lang, "dash_by_category"), groups["category"], known(category_name))
         + dash_bars(t(lang, "dash_by_status"), groups["status"], known(status_name))
@@ -2072,6 +2104,411 @@ def dashboard_html(lang):
     return (f'<div class="mcbi-tiles">{tiles}</div>'
             f'<div class="mcbi-dash">{boxes}</div>'
             f'<p class="mcbi-small">{updated}</p>')
+
+
+# ======================================================================
+# SECOND LIFE: offer tested batteries, let recyclers / repurposers ask
+# ======================================================================
+#
+# A battery owner records a state-of-health (SoH) test and offers the
+# battery. Any approved organization can browse the offers (the seller's
+# name is hidden) and send a request. The seller then sees the buyer's
+# organization name and email and contacts them directly. The portal does
+# not handle payment or contracts.
+
+TEST_METHODS = ("BMS", "capacity_test", "impedance", "other")
+SL_NOTE_MAX = 300
+SL_PRICE_MAX = 80
+TESTED_ON_PATTERN = re.compile(r"\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])")
+
+TEST_METHOD_NAMES = {
+    "en": {"BMS": "BMS reading", "capacity_test": "Full capacity test",
+           "impedance": "Impedance / rapid test", "other": "Other"},
+    "mn": {"BMS": "BMS-ийн заалт", "capacity_test": "Бүрэн багтаамжийн тест",
+           "impedance": "Эсэргүүцлийн / хурдан тест", "other": "Бусад"},
+}
+
+SL_TEXT = {
+    "en": {
+        "tab_second": "Second life",
+        "sl_title": "Second life",
+        "sl_intro": ("A used battery can still be worth something. Record a health test "
+                     "and offer the battery, so a recycler or a solar / storage installer "
+                     "can find it instead of it being thrown away."),
+        "sl_offer_title": "Offer one of your batteries",
+        "sl_offer_hint": "Only batteries registered by your organization can be offered.",
+        "sl_soh": "Measured state of health (%)",
+        "sl_method": "How was it tested?",
+        "sl_tested_on": "Test date",
+        "sl_tested_on_info": "Format YYYY-MM-DD",
+        "sl_price": "Asking price (optional)",
+        "sl_price_ph": "e.g. 250 EUR, or 'negotiable'",
+        "sl_note": "Note for buyers (optional)",
+        "sl_note_ph": "Condition, quantity, where it can be collected …",
+        "btn_offer": "Offer for second life",
+        "btn_withdraw": "Withdraw offer",
+        "sl_mine_title": "My offers and requests",
+        "btn_my_offers": "Show my offers",
+        "sl_market_title": "Available batteries",
+        "sl_market_hint": "Seller names are hidden. When you send a request, the seller sees your organization name and email so they can contact you.",
+        "sl_min_soh": "Minimum state of health (%)",
+        "sl_any": "Any",
+        "btn_browse": "Search",
+        "sl_ask_title": "Ask for a battery",
+        "sl_message": "Message to the seller (optional)",
+        "btn_ask": "Send request",
+        "sl_grade_note": "Grade is a rough guide from the SoH value only, not a certification. A: 80 % or more · B: 60–79 % · C: below 60 %.",
+        "grade_A": "A · suitable for second life",
+        "grade_B": "B · limited second life",
+        "grade_C": "C · send to recycling",
+        "col_id": "Battery ID", "col_cat": "Category", "col_chem": "Chemistry",
+        "col_kwh": "kWh", "col_soh": "SoH %", "col_grade": "Grade",
+        "col_country": "Seller country", "col_org_country": "Country", "col_price": "Price", "col_note": "Note",
+        "col_listed": "Listed", "col_status": "Offer", "col_requests": "Requests",
+        "col_buyer": "Organization", "col_kind": "Type", "col_email": "Email",
+        "col_message": "Message", "col_date": "Date", "col_method": "Test",
+        "sl_active": "open", "sl_closed": "withdrawn",
+        "sl_requests_title": "Requests from buyers",
+        "sl_no_offers": "You have not offered any batteries yet.",
+        "sl_no_requests": "No requests yet.",
+        "sl_market_empty": "No batteries match. Try a lower minimum SoH or another category.",
+        "msg_offered": "{id} is now offered for second life (SoH {soh} %, grade {grade}).",
+        "msg_withdrawn": "Offer for {id} withdrawn.",
+        "msg_asked": "Request sent for {id}. The seller will contact you by email.",
+        "msg_asked_again": "Request for {id} updated.",
+        "err_not_owner": "This battery was not registered by your organization.",
+        "err_no_offer": "This battery is not offered for second life.",
+        "err_own_battery": "This is your own battery.",
+        "err_waste": "A battery marked as waste cannot be offered.",
+        "err_method": "Choose how the battery was tested.",
+        "err_tested_on": "Test date must be a real date in the format YYYY-MM-DD, not in the future.",
+        "dash_offers": "Offered for second life",
+        "ev_soh_tested": "state of health tested",
+        "ev_offered": "offered for second life",
+        "ev_withdrawn": "second-life offer withdrawn",
+    },
+    "mn": {
+        "tab_second": "Хоёр дахь амьдрал",
+        "sl_title": "Хоёр дахь амьдрал",
+        "sl_intro": ("Ашигласан батарей үнэ цэнээ хадгалсан байж болно. Төлөвийн тестээ "
+                     "бүртгээд батарейгаа санал болгоорой. Ингэснээр дахин боловсруулагч "
+                     "эсвэл нарны / хадгалалтын систем суурилуулагч түүнийг хаягдахаас "
+                     "өмнө олж авна."),
+        "sl_offer_title": "Өөрийн батарейг санал болгох",
+        "sl_offer_hint": "Зөвхөн танай байгууллагын бүртгэсэн батарейг санал болгох боломжтой.",
+        "sl_soh": "Хэмжсэн эрүүл мэндийн төлөв SoH (%)",
+        "sl_method": "Ямар аргаар тестэлсэн бэ?",
+        "sl_tested_on": "Тестийн огноо",
+        "sl_tested_on_info": "Хэлбэр: ЖЖЖЖ-СС-ӨӨ",
+        "sl_price": "Үнэ (заавал биш)",
+        "sl_price_ph": "ж: 250 EUR, эсвэл 'тохиролцоно'",
+        "sl_note": "Худалдан авагчид тэмдэглэл (заавал биш)",
+        "sl_note_ph": "Төлөв байдал, тоо ширхэг, хаанаас авах …",
+        "btn_offer": "Хоёр дахь амьдралд санал болгох",
+        "btn_withdraw": "Саналыг цуцлах",
+        "sl_mine_title": "Миний саналууд ба хүсэлтүүд",
+        "btn_my_offers": "Миний саналуудыг харах",
+        "sl_market_title": "Санал болгож буй батарейнууд",
+        "sl_market_hint": "Худалдагчийн нэр харагдахгүй. Та хүсэлт илгээхэд худалдагч танай байгууллагын нэр, имэйлийг харж, тантай холбогдоно.",
+        "sl_min_soh": "Хамгийн бага SoH (%)",
+        "sl_any": "Бүгд",
+        "btn_browse": "Хайх",
+        "sl_ask_title": "Батарей авах хүсэлт",
+        "sl_message": "Худалдагчид илгээх зурвас (заавал биш)",
+        "btn_ask": "Хүсэлт илгээх",
+        "sl_grade_note": "Зэрэглэл нь зөвхөн SoH утгаас гаргасан ойролцоо чиглэл бөгөөд гэрчилгээ биш. A: 80 %-иас дээш · B: 60–79 % · C: 60 %-иас доош.",
+        "grade_A": "A · хоёр дахь амьдралд тохиромжтой",
+        "grade_B": "B · хязгаарлагдмал хэрэглээ",
+        "grade_C": "C · дахин боловсруулалтад",
+        "col_id": "Батарейн ID", "col_cat": "Ангилал", "col_chem": "Химийн төрөл",
+        "col_kwh": "кВт·цаг", "col_soh": "SoH %", "col_grade": "Зэрэглэл",
+        "col_country": "Худалдагчийн улс", "col_org_country": "Улс", "col_price": "Үнэ", "col_note": "Тэмдэглэл",
+        "col_listed": "Нийтэлсэн", "col_status": "Санал", "col_requests": "Хүсэлт",
+        "col_buyer": "Байгууллага", "col_kind": "Төрөл", "col_email": "Имэйл",
+        "col_message": "Зурвас", "col_date": "Огноо", "col_method": "Тест",
+        "sl_active": "нээлттэй", "sl_closed": "цуцалсан",
+        "sl_requests_title": "Худалдан авагчдын хүсэлт",
+        "sl_no_offers": "Та одоогоор батарей санал болгоогүй байна.",
+        "sl_no_requests": "Хүсэлт ирээгүй байна.",
+        "sl_market_empty": "Тохирох батарей алга. SoH-ийн доод хязгаарыг багасгах эсвэл өөр ангилал сонгоно уу.",
+        "msg_offered": "{id} хоёр дахь амьдралд санал болгогдлоо (SoH {soh} %, зэрэглэл {grade}).",
+        "msg_withdrawn": "{id}-ийн саналыг цуцаллаа.",
+        "msg_asked": "{id}-д хүсэлт илгээлээ. Худалдагч тантай имэйлээр холбогдоно.",
+        "msg_asked_again": "{id}-ийн хүсэлтийг шинэчиллээ.",
+        "err_not_owner": "Энэ батарейг танай байгууллага бүртгээгүй байна.",
+        "err_no_offer": "Энэ батарей хоёр дахь амьдралд санал болгогдоогүй байна.",
+        "err_own_battery": "Энэ бол танай өөрийн батарей.",
+        "err_waste": "Хаягдал гэж тэмдэглэсэн батарейг санал болгох боломжгүй.",
+        "err_method": "Тестийн аргыг сонгоно уу.",
+        "err_tested_on": "Тестийн огноо ЖЖЖЖ-СС-ӨӨ хэлбэртэй бодит огноо байх ба ирээдүйн огноо байж болохгүй.",
+        "dash_offers": "Хоёр дахь амьдралд санал болгосон",
+        "ev_soh_tested": "төлөвийг тестэлсэн",
+        "ev_offered": "хоёр дахь амьдралд санал болгосон",
+        "ev_withdrawn": "хоёр дахь амьдралын саналыг цуцалсан",
+    },
+}
+for _code, _texts in SL_TEXT.items():
+    TEXT[_code].update(_texts)
+
+
+def method_name(lang, code):
+    return TEST_METHOD_NAMES.get(lang, TEST_METHOD_NAMES["en"]).get(code, code)
+
+
+def method_choices(lang):
+    return [(method_name(lang, code), code) for code in TEST_METHODS]
+
+
+def soh_grade(soh):
+    """A rough grade from the state of health alone (not a certification)."""
+    if soh is None:
+        return None
+    if soh >= 80:
+        return "A"
+    if soh >= 60:
+        return "B"
+    return "C"
+
+
+def grade_label(lang, soh):
+    grade = soh_grade(soh)
+    return t(lang, "grade_" + grade) if grade else "—"
+
+
+def short_text(raw, limit):
+    value = " ".join((raw or "").split())
+    return value[:limit] or None
+
+
+def clean_battery_id(raw, lang):
+    battery_id = (raw or "").strip().upper()
+    if not battery_id:
+        raise gr.Error(t(lang, "err_enter_id"))
+    return battery_id
+
+
+def clean_tested_on(raw, lang):
+    value = (raw or "").strip()
+    try:
+        if not TESTED_ON_PATTERN.fullmatch(value):
+            raise ValueError
+        day = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise gr.Error(t(lang, "err_tested_on"))
+    if day > datetime.now(LOCAL_TZ).date():
+        raise gr.Error(t(lang, "err_tested_on"))
+    return value
+
+
+def offer_second_life(session, battery_id, soh, method, tested_on, price,
+                      note, lang):
+    org = require_session(session, lang)
+    battery_id = clean_battery_id(battery_id, lang)
+    try:
+        soh = parse_number(soh, t(lang, "sl_soh"), lang, minimum=0, maximum=100)
+    except InputError as error:
+        raise gr.Error(str(error))
+    if method not in TEST_METHODS:
+        raise gr.Error(t(lang, "err_method"))
+    tested_on = clean_tested_on(tested_on, lang)
+    price = short_text(price, SL_PRICE_MAX)
+    note = short_text(note, SL_NOTE_MAX)
+
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                b = fetch_battery(cur, battery_id, lock=True)
+                if b is None:
+                    raise gr.Error(t(lang, "err_battery_missing"))
+                if b["organization_id"] != org["id"]:
+                    raise gr.Error(t(lang, "err_not_owner"))
+                if b["status"] == "waste":
+                    raise gr.Error(t(lang, "err_waste"))
+
+                old_soh = b["state_of_health_pct"]
+                if old_soh != soh:
+                    cur.execute(
+                        "UPDATE batteries SET state_of_health_pct = %s WHERE id = %s",
+                        (soh, battery_id))
+                    cur.execute("""
+                        INSERT INTO battery_events
+                            (battery_id, event_type, old_value, new_value, reason)
+                        VALUES (%s, 'soh_tested', %s, %s, %s)
+                    """, (battery_id,
+                          None if old_soh is None else fmt_number(old_soh),
+                          fmt_number(soh), f"{method} {tested_on}"))
+
+                cur.execute("""
+                    INSERT INTO second_life_offers
+                        (battery_id, organization_id, soh_pct, test_method,
+                         tested_on, price_note, note)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (battery_id) DO UPDATE SET
+                        soh_pct = EXCLUDED.soh_pct,
+                        test_method = EXCLUDED.test_method,
+                        tested_on = EXCLUDED.tested_on,
+                        price_note = EXCLUDED.price_note,
+                        note = EXCLUDED.note,
+                        active = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (battery_id, org["id"], soh, method, tested_on, price, note))
+                cur.execute("""
+                    INSERT INTO battery_events (battery_id, event_type, new_value)
+                    VALUES (%s, 'offered_second_life', %s)
+                """, (battery_id, soh_grade(soh)))
+
+    message = t(lang, "msg_offered", id=battery_id, soh=fmt_number(soh),
+                grade=soh_grade(soh))
+    return message, my_offers_md(org["id"], lang)
+
+
+def withdraw_offer(session, battery_id, lang):
+    org = require_session(session, lang)
+    battery_id = clean_battery_id(battery_id, lang)
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE second_life_offers SET active = FALSE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE battery_id = %s AND organization_id = %s AND active
+                """, (battery_id, org["id"]))
+                if cur.rowcount == 0:
+                    raise gr.Error(t(lang, "err_no_offer"))
+                cur.execute("""
+                    INSERT INTO battery_events (battery_id, event_type)
+                    VALUES (%s, 'offer_withdrawn')
+                """, (battery_id,))
+    return t(lang, "msg_withdrawn", id=battery_id), my_offers_md(org["id"], lang)
+
+
+def my_offers_md(org_id, lang):
+    """The seller's own offers, and the requests buyers sent for them."""
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT o.battery_id, b.category, o.soh_pct, o.test_method,
+                       o.tested_on, o.price_note, o.active,
+                       (SELECT COUNT(*) FROM second_life_interest i
+                        WHERE i.battery_id = o.battery_id)
+                FROM second_life_offers o JOIN batteries b ON b.id = o.battery_id
+                WHERE o.organization_id = %s
+                ORDER BY o.active DESC, o.updated_at DESC
+            """, (org_id,))
+            offers = cur.fetchall()
+            cur.execute("""
+                SELECT i.battery_id, g.name, g.kind, g.email, g.country,
+                       i.message, i.created_at
+                FROM second_life_interest i
+                JOIN second_life_offers o ON o.battery_id = i.battery_id
+                JOIN organizations g ON g.id = i.buyer_org_id
+                WHERE o.organization_id = %s
+                ORDER BY i.created_at DESC
+            """, (org_id,))
+            requests = cur.fetchall()
+
+    if not offers:
+        return t(lang, "sl_no_offers")
+    parts = [md_table(
+        [t(lang, k) for k in ("col_id", "col_cat", "col_soh", "col_grade",
+                              "col_method", "col_price", "col_status",
+                              "col_requests")],
+        [(bid, category_name(lang, cat) if cat else "—", fmt_number(soh),
+          soh_grade(soh), f"{method_name(lang, method)} ({tested})",
+          price or "—", t(lang, "sl_active" if active else "sl_closed"), n)
+         for bid, cat, soh, method, tested, price, active, n in offers])]
+    parts.append(f"\n**{t(lang, 'sl_requests_title')}**\n")
+    if requests:
+        parts.append(md_table(
+            [t(lang, k) for k in ("col_id", "col_buyer", "col_kind",
+                                  "col_email", "col_org_country", "col_message",
+                                  "col_date")],
+            [(bid, name, kind_name(lang, kind) if kind else "—", email,
+              country or "—", message or "—", local_time(created))
+             for bid, name, kind, email, country, message, created in requests]))
+    else:
+        parts.append(t(lang, "sl_no_requests"))
+    return "\n".join(parts)
+
+
+def show_my_offers(session, lang):
+    org = require_session(session, lang)
+    return my_offers_md(org["id"], lang)
+
+
+def browse_offers(session, category, chemistry, min_soh, lang):
+    require_session(session, lang)
+    where = ["o.active", "COALESCE(b.status, '') <> 'waste'"]
+    params = []
+    if category in CATEGORIES:
+        where.append("b.category = %s")
+        params.append(category)
+    if chemistry in CHEMISTRIES:
+        where.append("b.chemistry = %s")
+        params.append(chemistry)
+    if min_soh not in (None, ""):
+        try:
+            min_soh = parse_number(min_soh, t(lang, "sl_min_soh"), lang,
+                                   minimum=0, maximum=100)
+        except InputError as error:
+            raise gr.Error(str(error))
+        where.append("o.soh_pct >= %s")
+        params.append(min_soh)
+
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT o.battery_id, b.category, b.chemistry, b.capacity_kwh,
+                       o.soh_pct, g.country, o.price_note, o.note, o.listed_at
+                FROM second_life_offers o
+                JOIN batteries b ON b.id = o.battery_id
+                JOIN organizations g ON g.id = o.organization_id
+                WHERE {' AND '.join(where)}
+                ORDER BY o.soh_pct DESC, o.listed_at DESC
+                LIMIT 100
+            """, params)
+            rows = cur.fetchall()
+
+    if not rows:
+        return t(lang, "sl_market_empty")
+    return md_table(
+        [t(lang, k) for k in ("col_id", "col_cat", "col_chem", "col_kwh",
+                              "col_soh", "col_grade", "col_country",
+                              "col_price", "col_note", "col_listed")],
+        [(bid, category_name(lang, cat) if cat else "—",
+          chemistry_name(lang, chem) if chem else "—",
+          fmt_number(kwh) if kwh is not None else "—", fmt_number(soh),
+          grade_label(lang, soh), country or "—", price or "—", note or "—",
+          local_time(listed)[:10])
+         for bid, cat, chem, kwh, soh, country, price, note, listed in rows])
+
+
+def ask_for_battery(session, battery_id, message, lang):
+    org = require_session(session, lang)
+    battery_id = clean_battery_id(battery_id, lang)
+    message = short_text(message, SL_NOTE_MAX)
+    with closing(psycopg2.connect(DATABASE_URL)) as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT organization_id FROM second_life_offers
+                    WHERE battery_id = %s AND active
+                """, (battery_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise gr.Error(t(lang, "err_no_offer"))
+                if row[0] == org["id"]:
+                    raise gr.Error(t(lang, "err_own_battery"))
+                cur.execute("""
+                    INSERT INTO second_life_interest (battery_id, buyer_org_id, message)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (battery_id, buyer_org_id)
+                    DO UPDATE SET message = EXCLUDED.message,
+                                  created_at = CURRENT_TIMESTAMP
+                    RETURNING (xmax = 0)
+                """, (battery_id, org["id"], message))
+                created = cur.fetchone()[0]
+    return t(lang, "msg_asked" if created else "msg_asked_again", id=battery_id)
 
 
 def find_battery(battery_id, lang):
@@ -3101,6 +3538,94 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
                 outputs=epr_table
             )
 
+        # ---------- Second life (needs sign-in) ----------
+        with mk(gr.Tab, {"label": "tab_second"}, id="second-life") as sl_tab:
+            mk(gr.HTML, {"value": intro_html("sl_title", "sl_intro")})
+
+            with gr.Column(elem_classes="mcbi-card"):
+                mk(gr.HTML, {"value": plain_title_html("sl_market_title")})
+                mk(gr.Markdown, {"value": "sl_market_hint"})
+                with gr.Row():
+                    sl_category = gr.Dropdown(
+                        choices=[(t(L0, "sl_any"), "")] + category_choices(L0),
+                        value="", label=t(L0, "category"))
+                    TRANSLATABLE.append((sl_category, {
+                        "label": "category",
+                        "choices": lambda lg: [(t(lg, "sl_any"), "")] + category_choices(lg)}))
+                    sl_chemistry = gr.Dropdown(
+                        choices=[(t(L0, "sl_any"), "")] + chemistry_choices(L0),
+                        value="", label=t(L0, "chemistry"))
+                    TRANSLATABLE.append((sl_chemistry, {
+                        "label": "chemistry",
+                        "choices": lambda lg: [(t(lg, "sl_any"), "")] + chemistry_choices(lg)}))
+                    sl_min_soh = mk(gr.Number, {"label": "sl_min_soh"}, value=None)
+                sl_browse_button = mk(gr.Button, {"value": "btn_browse"},
+                                      variant="primary")
+                sl_market = gr.Markdown("")
+                mk(gr.HTML, {"value": lambda lg: (
+                    f'<p class="mcbi-small">{t(lg, "sl_grade_note")}</p>')})
+                mk(gr.HTML, {"value": plain_title_html("sl_ask_title")})
+                with gr.Row():
+                    sl_ask_id = mk(gr.Textbox, {"label": "battery_id"})
+                    sl_message = mk(gr.Textbox, {"label": "sl_message"})
+                sl_ask_button = mk(gr.Button, {"value": "btn_ask"})
+                sl_ask_result = mk(gr.Textbox, {"label": "result"},
+                                   interactive=False)
+
+            with gr.Column(elem_classes="mcbi-card"):
+                mk(gr.HTML, {"value": plain_title_html("sl_offer_title")})
+                mk(gr.Markdown, {"value": "sl_offer_hint"})
+                with gr.Row():
+                    sl_battery_id = mk(gr.Textbox, {"label": "battery_id"})
+                    sl_soh = mk(gr.Number, {"label": "sl_soh"}, value=None)
+                with gr.Row():
+                    sl_method = mk(
+                        gr.Dropdown,
+                        {"choices": method_choices, "label": "sl_method"},
+                        value=None)
+                    sl_tested_on = mk(
+                        gr.Textbox,
+                        {"label": "sl_tested_on", "info": "sl_tested_on_info"},
+                        placeholder=datetime.now(LOCAL_TZ).strftime("%Y-%m-%d"))
+                with gr.Row():
+                    sl_price = mk(gr.Textbox,
+                                  {"label": "sl_price", "placeholder": "sl_price_ph"})
+                    sl_note = mk(gr.Textbox,
+                                 {"label": "sl_note", "placeholder": "sl_note_ph"})
+                with gr.Row():
+                    sl_offer_button = mk(gr.Button, {"value": "btn_offer"},
+                                         variant="primary", scale=3)
+                    sl_withdraw_button = mk(gr.Button, {"value": "btn_withdraw"},
+                                            variant="secondary", scale=1)
+                sl_offer_result = mk(gr.Textbox, {"label": "result"},
+                                     interactive=False)
+
+            with gr.Column(elem_classes="mcbi-card"):
+                mk(gr.HTML, {"value": plain_title_html("sl_mine_title")})
+                sl_mine_button = mk(gr.Button, {"value": "btn_my_offers"},
+                                    variant="secondary")
+                sl_mine = gr.Markdown("")
+
+            sl_browse_button.click(
+                fn=browse_offers,
+                inputs=[session, sl_category, sl_chemistry, sl_min_soh, lang],
+                outputs=sl_market)
+            sl_ask_button.click(
+                fn=ask_for_battery,
+                inputs=[session, sl_ask_id, sl_message, lang],
+                outputs=sl_ask_result)
+            sl_offer_button.click(
+                fn=offer_second_life,
+                inputs=[session, sl_battery_id, sl_soh, sl_method,
+                        sl_tested_on, sl_price, sl_note, lang],
+                outputs=[sl_offer_result, sl_mine])
+            sl_withdraw_button.click(
+                fn=withdraw_offer,
+                inputs=[session, sl_battery_id, lang],
+                outputs=[sl_offer_result, sl_mine])
+            sl_mine_button.click(
+                fn=show_my_offers, inputs=[session, lang], outputs=sl_mine)
+
         # ---------- Organization onboarding ----------
         with mk(gr.Tab, {"label": "tab_org"}, id="organization") as org_tab:
             mk(gr.HTML, {"value": intro_html("org_title", "org_intro")})
@@ -3300,7 +3825,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
             admin_lock_button.click(fn=wipe_admin, inputs=[],
                                     outputs=admin_wipe)
             for other_tab in (find_tab, dash_tab, register_tab, epr_tab,
-                              org_tab):
+                              sl_tab, org_tab):
                 other_tab.select(fn=wipe_admin, inputs=[], outputs=admin_wipe)
 
     mk(gr.Markdown, {"value": footer_md}, elem_id="mcbi-footer")
@@ -3318,7 +3843,9 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
         fn=sign_out,
         inputs=lang,
         outputs=[session, login_box, account_bar, account_md]
-    ).then(fn=wipe_admin, inputs=[], outputs=admin_wipe)
+    ).then(fn=wipe_admin, inputs=[], outputs=admin_wipe).then(
+        fn=lambda: ("", "", "", ""), inputs=[],
+        outputs=[sl_market, sl_mine, sl_offer_result, sl_ask_result])
 
     # ---------- Changing the language ----------
     # Besides the components registered with mk(), a few things depend on
@@ -3363,7 +3890,7 @@ with gr.Blocks(title="MCBI EPR Portal") as demo:
     # without this an empty optional field (state of health, carbon ...)
     # would be saved as 0.
     number_boxes = [weight, capacity, voltage, carbon, recycled, soh,
-                    epr_units, epr_weight]
+                    epr_units, epr_weight, sl_soh, sl_min_soh]
     demo.load(fn=lambda: (None,) * len(number_boxes), inputs=[],
               outputs=number_boxes)
 
